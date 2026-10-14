@@ -1,0 +1,10 @@
+# Local development: mock model, dev auth, Postgres from `docker compose` (deploy/docker/compose.yaml).
+app: {environment: development, log_level: INFO}
+database: {url: "${DATABASE_URL:-postgresql+psycopg://branchops:branchops@localhost:55432/branchops}"}
+jira:
+  field_mapping: {branch_code: customfield_10101, application: customfield_10102}
+llm: {provider: mock}
+workflow: {checkpointer: postgres}
+worker: {concurrency: 1, poll_interval_seconds: 1, health_port: 8081}
+security: {auth_mode: dev, dev_user: developer, dev_roles: [ADMIN]}
+templates: {directory: templates}

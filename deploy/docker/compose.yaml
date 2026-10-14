@@ -1,0 +1,106 @@
+# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard.
+#
+#   make up        # build the image and start everything
+#   make seed      # send signed sample Jira webhooks
+#   make down
+#
+# Containers run like on OpenShift: arbitrary non-root UID in group 0, read-only root filesystem,
+# writable /tmp only, no capabilities. The model provider defaults to the deterministic mock; see
+# config/docker.yaml and .env.example to point the stack at a real OpenAI-compatible endpoint.
+name: branchops
+
+x-app: &app
+  image: ${IMAGE:-branchops-intelligence:dev}
+  user: "1000770000:0"
+  read_only: true
+  tmpfs:
+    - /tmp:uid=1000770000,gid=0,mode=1777
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  env_file:
+    - path: ../../.env
+      required: false
+  environment: &app-env
+    BRANCHOPS_CONFIG: /app/config/branchops.yaml
+    JIRA_WEBHOOK_SECRETS: ${JIRA_WEBHOOK_SECRETS:-dev-secret}
+    DASHBOARD_STORAGE_SECRET: ${DASHBOARD_STORAGE_SECRET:-local-dev-storage-secret}
+  volumes:
+    - ../../config/docker.yaml:/app/config/branchops.yaml:ro
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    environment:
+      POSTGRES_USER: branchops
+      POSTGRES_PASSWORD: branchops
+      POSTGRES_DB: branchops
+    ports: ["${POSTGRES_PORT:-55432}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U branchops -d branchops"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
+        WHEELHOUSE_SOURCE: ${WHEELHOUSE_SOURCE:-online}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    command: ["api"]
+    ports: ["${API_PORT:-8080}:8080"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    # Health/metrics on :8081 inside the container (not published so the service can be scaled).
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+    stop_grace_period: 60s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  dashboard:
+    <<: *app
+    command: ["dashboard"]
+    ports: ["${DASHBOARD_PORT:-8090}:8090"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  pgdata:

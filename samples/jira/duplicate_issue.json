@@ -1,0 +1,47 @@
+{
+  "timestamp": 1791973800000,
+  "webhookEvent": "jira:issue_created",
+  "user": {
+    "name": "sube.personeli",
+    "displayName": "Şube Personeli"
+  },
+  "issue": {
+    "id": "20104",
+    "key": "BOPS-104",
+    "fields": {
+      "summary": "Gişe Ekranı EFT onayında EFT-4012 hatası",
+      "description": "Gişe Ekranı uygulamasında EFT onaylanırken Hata kodu: EFT-4012 İşlem zaman aşımına uğradı mesajı alınıyor.\nŞube 1234, saat 09:25 civarı. Her işlemde oluyor. Müşteriler bekliyor.",
+      "status": {
+        "name": "Açık"
+      },
+      "issuetype": {
+        "name": "Olay"
+      },
+      "priority": {
+        "name": "Yüksek"
+      },
+      "labels": [
+        "sube-operasyon"
+      ],
+      "components": [
+        {
+          "name": "Şube Uygulamaları"
+        }
+      ],
+      "reporter": {
+        "name": "sube.personeli",
+        "displayName": "Şube Personeli"
+      },
+      "project": {
+        "key": "BOPS"
+      },
+      "created": "2026-10-14T09:30:00.000+0300",
+      "updated": "2026-10-14T09:30:00.000+0300",
+      "customfield_10101": "1234",
+      "customfield_10102": {
+        "value": "Gişe Ekranı"
+      }
+    }
+  },
+  "issue_event_type_name": "issue_created"
+}

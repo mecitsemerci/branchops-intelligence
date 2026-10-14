@@ -1,0 +1,47 @@
+{
+  "timestamp": 1792150000000,
+  "webhookEvent": "jira:issue_created",
+  "user": {
+    "name": "sube.personeli",
+    "displayName": "Şube Personeli"
+  },
+  "issue": {
+    "id": "20105",
+    "key": "BOPS-105",
+    "fields": {
+      "summary": "FAST gönderiminde EFT-4012 zaman aşımı",
+      "description": "Gişe Ekranı uygulamasında FAST ile para gönderirken Hata kodu: EFT-4012 İşlem zaman aşımına uğradı hatası alındı.\nŞube 3307. 16.10.2026 10:40. Aralıklı olarak oluyor, ilk denemede hata verip ikinci denemede geçiyor.",
+      "status": {
+        "name": "Açık"
+      },
+      "issuetype": {
+        "name": "Olay"
+      },
+      "priority": {
+        "name": "Yüksek"
+      },
+      "labels": [
+        "sube-operasyon"
+      ],
+      "components": [
+        {
+          "name": "Şube Uygulamaları"
+        }
+      ],
+      "reporter": {
+        "name": "sube.personeli",
+        "displayName": "Şube Personeli"
+      },
+      "project": {
+        "key": "BOPS"
+      },
+      "created": "2026-10-16T10:45:00.000+0300",
+      "updated": "2026-10-16T10:45:00.000+0300",
+      "customfield_10101": "3307",
+      "customfield_10102": {
+        "value": "Gişe Ekranı"
+      }
+    }
+  },
+  "issue_event_type_name": "issue_created"
+}

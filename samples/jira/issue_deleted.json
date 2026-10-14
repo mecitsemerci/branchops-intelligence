@@ -1,0 +1,18 @@
+{
+  "timestamp": 1791990000000,
+  "webhookEvent": "jira:issue_deleted",
+  "user": {
+    "name": "jira.admin"
+  },
+  "issue": {
+    "id": "20103",
+    "key": "BOPS-103",
+    "fields": {
+      "summary": "Sistem çalışmıyor",
+      "project": {
+        "key": "BOPS"
+      },
+      "updated": "2026-10-14T16:00:00.000+0300"
+    }
+  }
+}

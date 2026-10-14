@@ -1,0 +1,28 @@
+{
+  "timestamp": 1791978000000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_updated",
+  "user": {
+    "name": "sube.personeli"
+  },
+  "issue": {
+    "id": "20102",
+    "key": "BOPS-102",
+    "fields": {
+      "description": "Şube 2201 kasa bölümündeki kart okuyucu müşteri kartlarını okumuyor. Müşteriler bekliyor.\nCihaz modeli: Ingenico IPP320, seri no 12AB34567. Kasa terminali SB2201-KASA01.\n14.10.2026 09:20 itibarıyla her işlemde oluyor. Kablo çıkarılıp takıldı, cihaz yeniden başlatıldı; sorun devam ediyor.",
+      "updated": "2026-10-14T10:40:00.000+0300"
+    }
+  },
+  "changelog": {
+    "id": "30001",
+    "items": [
+      {
+        "field": "description",
+        "fieldtype": "jira",
+        "fieldId": "description",
+        "fromString": "Şube 2201 kasa bölümündeki kart okuyucu müşteri kartlarını okumuyor. Müşteriler bekliyor.",
+        "toString": "(güncellendi)"
+      }
+    ]
+  }
+}

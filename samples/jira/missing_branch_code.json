@@ -1,0 +1,43 @@
+{
+  "timestamp": 1791980000000,
+  "webhookEvent": "jira:issue_created",
+  "user": {
+    "name": "sube.personeli",
+    "displayName": "Şube Personeli"
+  },
+  "issue": {
+    "id": "20106",
+    "key": "BOPS-106",
+    "fields": {
+      "summary": "Kredi Başvuru ekranı KRD-221 hatası veriyor",
+      "description": "Kredi Başvuru uygulaması içinde kredi başvuru kaydı yapılırken Hata kodu: KRD-221 Müşteri skor bilgisi alınamadı.\n14.10.2026 11:15 itibarıyla her seferinde oluyor. Müşteri bekliyor. Kapatıp açtık, sonuç değişmedi.",
+      "status": {
+        "name": "Açık"
+      },
+      "issuetype": {
+        "name": "Olay"
+      },
+      "priority": {
+        "name": "Yüksek"
+      },
+      "labels": [
+        "sube-operasyon"
+      ],
+      "components": [
+        {
+          "name": "Şube Uygulamaları"
+        }
+      ],
+      "reporter": {
+        "name": "sube.personeli",
+        "displayName": "Şube Personeli"
+      },
+      "project": {
+        "key": "BOPS"
+      },
+      "created": "2026-10-14T11:20:00.000+0300",
+      "updated": "2026-10-14T11:20:00.000+0300"
+    }
+  },
+  "issue_event_type_name": "issue_created"
+}
