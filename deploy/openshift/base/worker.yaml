@@ -1,0 +1,82 @@
+# Worker: claims inbox events (SKIP LOCKED) and calls the internal LLM gateway. Horizontally scalable.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: branchops-worker
+  labels: {app.kubernetes.io/name: branchops-worker, app.kubernetes.io/component: worker}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: branchops-worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: branchops-worker, app.kubernetes.io/component: worker}
+    spec:
+      serviceAccountName: branchops-worker
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      # Must exceed the time to finish in-flight analyses (worker.shutdown_grace_seconds); unfinished
+      # events are recovered by lease expiry anyway.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker
+          image: branchops-intelligence
+          args: ["worker"]
+          envFrom:
+            - secretRef: {name: branchops-secrets}
+          ports:
+            - {name: health, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8081}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8081}
+            periodSeconds: 30
+            failureThreshold: 4
+          startupProbe:
+            httpGet: {path: /healthz, port: 8081}
+            periodSeconds: 5
+            failureThreshold: 36
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {cpu: "1", memory: 768Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: config, mountPath: /app/config, readOnly: true}
+            - {name: ca-bundle, mountPath: /etc/pki/bank, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: config, configMap: {name: branchops-config}}
+        - {name: ca-bundle, configMap: {name: bank-ca-bundle, items: [{key: ca-bundle.crt, path: ca-bundle.crt}]}}
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: branchops-worker-metrics
+  labels: {app.kubernetes.io/name: branchops-worker}
+spec:
+  selector: {app.kubernetes.io/name: branchops-worker}
+  ports:
+    - {name: metrics, port: 8081, targetPort: 8081}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: branchops-worker}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: branchops-worker}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: branchops-worker}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: branchops-worker}

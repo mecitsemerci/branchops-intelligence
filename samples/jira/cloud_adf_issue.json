@@ -1,0 +1,68 @@
+{
+  "timestamp": 1791983000000,
+  "webhookEvent": "jira:issue_created",
+  "issue_event_type_name": "issue_created",
+  "user": {
+    "accountId": "5b10ac8d82e05b22cc7d4ef5",
+    "displayName": "Şube Personeli"
+  },
+  "issue": {
+    "id": "20109",
+    "key": "BOPS-109",
+    "fields": {
+      "summary": "Oturum açılamıyor - hesap kilitlendi",
+      "description": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Şube 1890 personeli Şube Portalı uygulamasına giriş yapamıyor, hesap kilitlendi."
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hata mesajı: AUTH-403 Kullanıcı hesabı kilitli."
+              }
+            ]
+          },
+          {
+            "type": "bulletList",
+            "content": [
+              {
+                "type": "listItem",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Şifre sıfırlama denendi"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "status": {
+        "name": "Open"
+      },
+      "project": {
+        "key": "BOPS"
+      },
+      "created": "2026-10-14T14:30:00.000+0300",
+      "updated": "2026-10-14T14:30:00.000+0300",
+      "customfield_10101": null
+    }
+  }
+}

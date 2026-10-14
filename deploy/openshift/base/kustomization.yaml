@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: branchops-intelligence
+    includeSelectors: false
+resources:
+  - serviceaccounts.yaml
+  - api.yaml
+  - worker.yaml
+  - dashboard.yaml
+  - networkpolicies.yaml
+  - migrate-job.yaml
+configMapGenerator:
+  - name: branchops-config
+    files:
+      - branchops.yaml
+  - name: oauth2-proxy-config
+    literals:
+      - OAUTH2_PROXY_PROVIDER=oidc
+      - OAUTH2_PROXY_OIDC_ISSUER_URL=https://sso.bank.internal/realms/bank
+      - OAUTH2_PROXY_OIDC_GROUPS_CLAIM=groups
+      - OAUTH2_PROXY_EMAIL_DOMAINS=*
+      - OAUTH2_PROXY_PASS_USER_HEADERS=true
+      - OAUTH2_PROXY_SKIP_AUTH_STRIP_HEADERS=true
+      - OAUTH2_PROXY_COOKIE_SECURE=true
+      - OAUTH2_PROXY_COOKIE_SAMESITE=lax
+      - OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true
+      - OAUTH2_PROXY_PROVIDER_CA_FILES=/etc/pki/bank/ca-bundle.crt
+      - OAUTH2_PROXY_ALLOWED_GROUPS=branchops-viewers,branchops-analysts,branchops-admins
+images:
+  - name: branchops-intelligence
+    newName: registry.bank.internal/branchops/branchops-intelligence
+    newTag: 0.1.0
+  - name: oauth2-proxy
+    newName: registry.bank.internal/mirror/oauth2-proxy/oauth2-proxy
+    newTag: v7.7.1

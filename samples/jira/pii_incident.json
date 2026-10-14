@@ -1,0 +1,43 @@
+{
+  "timestamp": 1791984000000,
+  "webhookEvent": "jira:issue_created",
+  "user": {
+    "name": "sube.personeli",
+    "displayName": "Şube Personeli"
+  },
+  "issue": {
+    "id": "20110",
+    "key": "BOPS-110",
+    "fields": {
+      "summary": "Müşteri hesabına para yatırma işlemi tamamlanmadı",
+      "description": "Şube 1234 vezne. Müşteri TCKN 10000000146, IBAN TR33 0006 1005 1978 6457 8413 26 hesabına nakit para yatırma işlemi yapılırken\nHata kodu: CSH-118 Hesap bulunamadı. Kart no 4111 1111 1111 1111. Müşteri telefonu 0532 123 45 67.\n14.10.2026 15:10. Müşteri bekliyor.",
+      "status": {
+        "name": "Açık"
+      },
+      "issuetype": {
+        "name": "Olay"
+      },
+      "priority": {
+        "name": "Yüksek"
+      },
+      "labels": [
+        "sube-operasyon"
+      ],
+      "components": [
+        {
+          "name": "Şube Uygulamaları"
+        }
+      ],
+      "reporter": {
+        "name": "sube.personeli",
+        "displayName": "Şube Personeli"
+      },
+      "project": {
+        "key": "BOPS"
+      },
+      "created": "2026-10-14T15:15:00.000+0300",
+      "updated": "2026-10-14T15:15:00.000+0300"
+    }
+  },
+  "issue_event_type_name": "issue_created"
+}

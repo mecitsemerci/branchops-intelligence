@@ -1,0 +1,27 @@
+{
+  "timestamp": 1791975500000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_updated",
+  "user": {
+    "name": "sube.personeli"
+  },
+  "issue": {
+    "id": "20102",
+    "key": "BOPS-102",
+    "fields": {
+      "summary": "Kart okuyucu kartı okumuyor",
+      "description": "ESKİ AÇIKLAMA - bu sürüm daha eski",
+      "updated": "2026-10-14T09:58:00.000+0300"
+    }
+  },
+  "changelog": {
+    "id": "29999",
+    "items": [
+      {
+        "field": "description",
+        "fieldId": "description",
+        "toString": "ESKİ"
+      }
+    ]
+  }
+}

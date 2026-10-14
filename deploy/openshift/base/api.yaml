@@ -1,0 +1,117 @@
+# API: FastAPI app bound to 127.0.0.1:8080 behind an oauth2-proxy sidecar (TLS :8443).
+# Jira webhooks and probes bypass SSO via skip-auth routes; the webhook itself is HMAC/token authenticated.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: branchops-api
+  labels: {app.kubernetes.io/name: branchops-api, app.kubernetes.io/component: api}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: branchops-api}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: branchops-api, app.kubernetes.io/component: api}
+    spec:
+      serviceAccountName: branchops-api
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: api
+          image: branchops-intelligence
+          args: ["api"]
+          envFrom:
+            - secretRef: {name: branchops-secrets}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext: &restricted
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts: &appmounts
+            - {name: config, mountPath: /app/config, readOnly: true}
+            - {name: ca-bundle, mountPath: /etc/pki/bank, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+        - name: oauth2-proxy
+          image: oauth2-proxy
+          args:
+            - --http-address=
+            - --https-address=0.0.0.0:8443
+            - --tls-cert-file=/etc/tls/private/tls.crt
+            - --tls-key-file=/etc/tls/private/tls.key
+            - --upstream=http://127.0.0.1:8080/
+            - --redirect-url=https://branchops-api.apps.bank.internal/oauth2/callback
+            - --skip-auth-route=POST=^/api/webhooks/jira$
+            - --skip-auth-route=GET=^/health/
+            - --skip-auth-route=GET=^/metrics$
+            - --reverse-proxy=false
+          envFrom:
+            - configMapRef: {name: oauth2-proxy-config}
+            - secretRef: {name: oauth2-proxy-secrets}
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe: &ready
+            httpGet: {path: /health/ready, port: 8443, scheme: HTTPS}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8443, scheme: HTTPS}
+            periodSeconds: 20
+            failureThreshold: 3
+          startupProbe:
+            httpGet: {path: /health/startup, port: 8443, scheme: HTTPS}
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext: *restricted
+          volumeMounts:
+            - {name: proxy-tls, mountPath: /etc/tls/private, readOnly: true}
+            - {name: ca-bundle, mountPath: /etc/pki/bank, readOnly: true}
+      volumes: &appvolumes
+        - {name: config, configMap: {name: branchops-config}}
+        - {name: ca-bundle, configMap: {name: bank-ca-bundle, items: [{key: ca-bundle.crt, path: ca-bundle.crt}]}}
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+        - {name: proxy-tls, secret: {secretName: branchops-api-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: branchops-api
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: branchops-api-tls
+  labels: {app.kubernetes.io/name: branchops-api}
+spec:
+  selector: {app.kubernetes.io/name: branchops-api}
+  ports:
+    - {name: https, port: 443, targetPort: 8443}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: branchops-api
+  annotations:
+    haproxy.router.openshift.io/hsts_header: max-age=31536000
+spec:
+  host: branchops-api.apps.bank.internal
+  to: {kind: Service, name: branchops-api}
+  port: {targetPort: https}
+  tls: {termination: reencrypt, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: branchops-api}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: branchops-api}
+---
+# Trusted bank CA bundle injected by the cluster network operator.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bank-ca-bundle
+  labels:
+    config.openshift.io/inject-trusted-cabundle: "true"

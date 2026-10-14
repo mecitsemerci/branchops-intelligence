@@ -1,0 +1,32 @@
+# Configuration for the docker compose stack (deploy/docker/compose.yaml).
+# Defaults: mock model provider and dev authentication. To use a real OpenAI-compatible endpoint set
+# LLM_PROVIDER=openai-compatible, LLM_BASE_URL, LLM_MODEL and LLM_API_KEY in .env (see .env.example).
+app:
+  environment: development
+  log_level: ${LOG_LEVEL:-INFO}
+api: {host: 0.0.0.0, port: 8080}
+dashboard: {host: 0.0.0.0, port: 8090}
+database:
+  url: ${DATABASE_URL:-postgresql+psycopg://branchops:branchops@postgres:5432/branchops}
+jira:
+  field_mapping:
+    branch_code: ${JIRA_FIELD_BRANCH_CODE:-customfield_10101}
+    application: ${JIRA_FIELD_APPLICATION:-customfield_10102}
+llm:
+  provider: ${LLM_PROVIDER:-mock}
+  base_url: ${LLM_BASE_URL:-}
+  model: ${LLM_MODEL:-GLM-5.3-Flash}
+  ca_bundle: ${LLM_CA_BUNDLE:-}
+workflow: {checkpointer: postgres}
+worker:
+  concurrency: ${WORKER_CONCURRENCY:-2}
+  poll_interval_seconds: 1
+  health_port: 8081
+security:
+  auth_mode: dev
+  dev_user: developer
+  dev_roles: [ADMIN]
+network:
+  # "host.docker.internal" lets the stack reach a model server running on the developer machine.
+  allowed_host_suffixes: [".svc", ".svc.cluster.local", ".internal", ".local", "localhost", "host.docker.internal"]
+templates: {directory: /app/templates}

@@ -1,0 +1,213 @@
+{
+  "template_id": "generic-operational-incident",
+  "version": "1.0.0",
+  "status": "published",
+  "name": "Genel Operasyonel Olay",
+  "description": "Sınıflandırılamayan olaylar için yedek şablon.",
+  "category": "OTHER",
+  "subcategories": [],
+  "is_fallback": true,
+  "fields": [
+    {
+      "name": "summary",
+      "label": "Özet",
+      "weight": 5,
+      "required": true,
+      "rubric": {
+        "criteria": "Özet, sorunu ve etkilenen işlemi tek cümlede tanımlamalı.",
+        "good": "Uygulama/cihaz, işlem ve belirti açıkça belirtilmiş.",
+        "acceptable": "Sorun anlaşılıyor ama işlem veya bileşen eksik.",
+        "poor": "Genel ifade ('hata var', 'çalışmıyor')."
+      },
+      "recommendation": "Özeti; etkilenen uygulama/cihaz, işlem ve gözlenen belirtiyi içerecek şekilde yeniden yazın.",
+      "validation": {
+        "min_words": 4,
+        "reject_generic_phrases": [
+          "hata",
+          "hata var",
+          "sorun var",
+          "çalışmıyor",
+          "acil",
+          "yardım",
+          "bakılması rica olunur",
+          "problem"
+        ]
+      }
+    },
+    {
+      "name": "description",
+      "label": "Açıklama",
+      "weight": 8,
+      "required": true,
+      "rubric": {
+        "criteria": "Açıklama, ne olduğunu, ne beklendiğini ve ne gözlendiğini anlatmalı.",
+        "good": "Beklenen ve gerçekleşen davranış ile bağlam açıkça anlatılmış.",
+        "acceptable": "Olay anlatılmış ancak beklenen davranış veya bağlam eksik.",
+        "poor": "Tek satırlık veya belirsiz açıklama."
+      },
+      "recommendation": "Açıklamaya beklenen davranışı, gerçekleşen davranışı ve sorunun hangi işlem sırasında oluştuğunu ekleyin.",
+      "validation": {
+        "min_words": 12
+      }
+    },
+    {
+      "name": "branch_code",
+      "label": "Şube kodu",
+      "weight": 8,
+      "required": true,
+      "rubric": {
+        "criteria": "Sorunun yaşandığı şubenin kodu.",
+        "good": "Geçerli şube kodu belirtilmiş.",
+        "acceptable": "Şube adı var ama kod yok.",
+        "poor": "Şube bilgisi belirsiz."
+      },
+      "recommendation": "Sorunun yaşandığı şubenin kodunu (ör. 1234) ekleyin.",
+      "validation": {
+        "pattern": "^\\d{3,5}$"
+      }
+    },
+    {
+      "name": "application",
+      "label": "Uygulama",
+      "weight": 8,
+      "required": false,
+      "rubric": {
+        "criteria": "Etkilenen uygulama veya ekranın adı.",
+        "good": "Uygulama ve ilgili ekran/modül belirtilmiş.",
+        "acceptable": "Uygulama adı var, modül yok.",
+        "poor": "Yalnızca 'sistem' gibi genel ifade."
+      },
+      "recommendation": "Etkilenen uygulamanın adını ve mümkünse ekran/modül bilgisini ekleyin."
+    },
+    {
+      "name": "application_version",
+      "label": "Uygulama sürümü",
+      "weight": 3,
+      "required": false,
+      "rubric": {
+        "criteria": "Uygulamanın sürüm/derleme numarası.",
+        "good": "Tam sürüm numarası var.",
+        "acceptable": "Kısmi sürüm bilgisi.",
+        "poor": "Sürüm bilgisi belirsiz."
+      },
+      "recommendation": "Uygulamanın sürüm numarasını (Hakkında ekranından) ekleyin."
+    },
+    {
+      "name": "business_process",
+      "label": "İş süreci",
+      "weight": 5,
+      "required": false,
+      "rubric": {
+        "criteria": "Sorunun etkilediği bankacılık işlemi/süreci.",
+        "good": "İşlem türü açıkça belirtilmiş (ör. EFT gönderimi).",
+        "acceptable": "Süreç dolaylı olarak anlaşılıyor.",
+        "poor": "Süreç belirsiz."
+      },
+      "recommendation": "Sorunun hangi bankacılık işlemi sırasında yaşandığını belirtin (ör. hesap açılışı, EFT, kasa işlemi)."
+    },
+    {
+      "name": "business_impact",
+      "label": "İş etkisi",
+      "weight": 8,
+      "required": false,
+      "rubric": {
+        "criteria": "Müşteri, işlem hacmi veya şube operasyonu üzerindeki etki.",
+        "good": "Etkilenen müşteri/işlem sayısı veya operasyonel etki somut.",
+        "acceptable": "Etki genel olarak belirtilmiş.",
+        "poor": "Etki belirtilmemiş veya 'acil' gibi genel."
+      },
+      "recommendation": "Sorunun etkisini somutlaştırın: kaç müşteri/işlem etkilendi, işlem alternatif kanaldan yapılabiliyor mu?"
+    },
+    {
+      "name": "error_details",
+      "label": "Hata detayı",
+      "weight": 12,
+      "required": true,
+      "rubric": {
+        "criteria": "Ekranda görülen hata mesajı/kodu birebir.",
+        "good": "Hata kodu ve mesaj metni birebir yazılmış.",
+        "acceptable": "Hata mesajı özetlenmiş, kod yok.",
+        "poor": "Hata yalnızca 'hata verdi' şeklinde."
+      },
+      "recommendation": "Ekranda görünen hata kodunu ve mesajını birebir (kopyala-yapıştır) ekleyin."
+    },
+    {
+      "name": "occurrence_time",
+      "label": "Oluşma zamanı",
+      "weight": 6,
+      "required": true,
+      "rubric": {
+        "criteria": "Sorunun ilk görüldüğü tarih ve saat.",
+        "good": "Tarih ve saat (dakika hassasiyetinde) var.",
+        "acceptable": "Yalnızca tarih veya 'bu sabah' gibi göreli ifade.",
+        "poor": "Zaman bilgisi belirsiz."
+      },
+      "recommendation": "Sorunun ilk görüldüğü tarih ve saati (ör. 14.10.2026 09:35) ekleyin."
+    },
+    {
+      "name": "reproduction_steps",
+      "label": "Tekrarlama adımları",
+      "weight": 7,
+      "required": false,
+      "rubric": {
+        "criteria": "Sorunu yeniden oluşturmak için izlenen adımlar.",
+        "good": "Numaralı, sıralı adımlar var.",
+        "acceptable": "Adımlar kısmen anlatılmış.",
+        "poor": "Adım yok veya 'işlem yaparken' gibi genel."
+      },
+      "recommendation": "Sorunu oluşturan adımları sırasıyla (1-2-3) yazın: hangi menü, hangi butona basıldı, hangi değer girildi."
+    },
+    {
+      "name": "frequency",
+      "label": "Sıklık",
+      "weight": 5,
+      "required": false,
+      "rubric": {
+        "criteria": "Sorunun ne sıklıkla tekrarlandığı.",
+        "good": "Sıklık ölçülebilir (ör. her işlemde, günde 3 kez).",
+        "acceptable": "Sıklık yaklaşık.",
+        "poor": "Sıklık belirsiz."
+      },
+      "recommendation": "Sorunun ne sıklıkla oluştuğunu belirtin (her işlemde mi, aralıklı mı, ilk kez mi?)."
+    },
+    {
+      "name": "environment",
+      "label": "Ortam",
+      "weight": 4,
+      "required": false,
+      "rubric": {
+        "criteria": "Terminal, işletim sistemi, cihaz modeli veya ağ ortamı.",
+        "good": "Terminal/cihaz adı ve ortam bilgisi var.",
+        "acceptable": "Ortam kısmen belirtilmiş.",
+        "poor": "Ortam belirsiz."
+      },
+      "recommendation": "Kullanılan terminal adı/IP'si, cihaz modeli veya ortam bilgisini ekleyin."
+    },
+    {
+      "name": "troubleshooting_steps",
+      "label": "Yapılan kontroller",
+      "weight": 6,
+      "required": false,
+      "rubric": {
+        "criteria": "Şubede denenen çözüm adımları ve sonuçları.",
+        "good": "Denenen adımlar ve sonuçları ayrı ayrı belirtilmiş.",
+        "acceptable": "Bazı kontroller belirtilmiş, sonuçlar yok.",
+        "poor": "Kontrol bilgisi yok."
+      },
+      "recommendation": "Şubede denediğiniz adımları ve sonuçlarını yazın (yeniden başlatma, farklı terminalde deneme, oturum kapatıp açma vb.)."
+    },
+    {
+      "name": "evidence",
+      "label": "Kanıt",
+      "weight": 5,
+      "required": false,
+      "rubric": {
+        "criteria": "Ekran görüntüsü, log, işlem referans numarası.",
+        "good": "Ekran görüntüsü/log veya işlem referansı mevcut.",
+        "acceptable": "Kanıttan söz edilmiş ama eklenmemiş.",
+        "poor": "Kanıt yok."
+      },
+      "recommendation": "Hata ekranının görüntüsünü veya ilgili işlem referans numarasını ekleyin (müşteri kişisel verilerini maskeleyerek)."
+    }
+  ]
+}

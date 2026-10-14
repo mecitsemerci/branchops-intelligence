@@ -1,0 +1,127 @@
+# BranchOps Intelligence configuration (production example).
+# ${VAR} is replaced from the environment at startup; ${VAR:-default} supplies a default.
+# Secrets are never written here: only the NAMES of environment variables populated from OpenShift Secrets.
+
+app:
+  environment: production          # development | test | production (production enables safety guards)
+  log_level: INFO
+  service_name: branchops-intelligence
+
+api:
+  host: 127.0.0.1                  # loopback: only the oauth-proxy sidecar / Route via proxy reaches the app
+  port: 8080
+
+database:
+  url: ${DATABASE_URL}             # postgresql+psycopg://user:pass@host:5432/branchops
+  pool_size: 5
+  max_overflow: 5
+  statement_timeout_ms: 30000
+  sslmode: ${DATABASE_SSLMODE:-verify-full}
+  sslrootcert: ${DATABASE_SSLROOTCERT:-/etc/pki/bank/ca-bundle.crt}
+
+webhook:
+  auth_mode: hmac_or_token         # hmac | token | hmac_or_token
+  secrets_env: JIRA_WEBHOOK_SECRETS   # comma-separated, supports rotation
+  token_header: X-BranchOps-Webhook-Token
+  allow_query_token: false         # enable only for legacy Jira that cannot send headers
+  query_token_secrets_env: JIRA_WEBHOOK_QUERY_TOKENS
+  max_body_bytes: 1048576
+  allowed_source_cidrs: []         # e.g. ["10.20.0.0/16"] — Jira node addresses
+
+jira:
+  field_mapping:                   # canonical field -> Jira custom field id
+    branch_code: ${JIRA_FIELD_BRANCH_CODE:-customfield_10101}
+    application: ${JIRA_FIELD_APPLICATION:-customfield_10102}
+  allowed_projects: []             # empty = all projects that send webhooks
+
+retention:
+  on_issue_deleted: soft_delete    # soft_delete | purge
+  redact_deleted_comments: true
+  redact_inbox_payload_after_processing: true
+
+worker:
+  concurrency: 2
+  batch_size: 4
+  poll_interval_seconds: 2
+  lease_seconds: 600
+  max_attempts: 5
+  backoff_base_seconds: 15
+  backoff_max_seconds: 1800
+  health_port: 8081
+  shutdown_grace_seconds: 60
+
+llm:
+  provider: openai-compatible
+  base_url: ${LLM_BASE_URL}        # e.g. https://llm-gateway.ai-platform.svc.cluster.local/v1
+  model: ${LLM_MODEL:-GLM-5.3-Flash}
+  api_key_env: LLM_API_KEY
+  timeout_seconds: 120
+  max_retries: 2
+  temperature: 0
+  max_output_tokens: 2048
+  ca_bundle: ${LLM_CA_BUNDLE:-/etc/pki/bank/ca-bundle.crt}
+  capability_detection: explicit  # explicit | probe
+  capabilities:
+    tool_calling: false
+    structured_outputs: ${LLM_CAP_JSON_SCHEMA:-false}
+    json_mode: ${LLM_CAP_JSON_OBJECT:-true}
+    reasoning_parameters: false
+    context_length: 32768
+    max_output_tokens: 4096
+  reasoning_effort: null
+  extra_body: {}
+
+workflow:
+  checkpointer: postgres           # postgres | memory | none
+  node_timeout_seconds: 300
+  max_repair_attempts: 1
+  max_input_chars: 24000
+  prompt_version: "2026.10-1"
+  similarity:
+    candidate_limit: 20
+    lookback_days: 180
+    min_text_rank: 0.01
+    verify_top_n: 5
+    duplicate_window_hours: 72
+    recurring_window_days: 30
+    recurring_threshold: 3
+
+templates:
+  directory: /app/templates
+
+scoring:
+  version: "2026.10-1"
+  sufficient_completeness_credit: 1.0
+  insufficient_completeness_credit: 1.0
+  unknown_completeness_handling: CREDIT
+  unknown_completeness_credit: 0.0
+  level_credits: {ABSENT: 0.0, POOR: 0.25, ACCEPTABLE: 0.6, GOOD: 1.0}
+  unknown_quality_handling: CREDIT
+  unknown_quality_credit: 0.0
+  low_quality_threshold: 50
+
+security:
+  auth_mode: oauth_proxy
+  trusted_proxy_hosts: ["127.0.0.1", "::1"]
+  user_header: X-Forwarded-User
+  groups_header: X-Forwarded-Groups
+  role_groups:
+    ADMIN: [branchops-admins]
+    ANALYST: [branchops-analysts]
+    VIEWER: [branchops-viewers]
+  masking_extra_patterns: []       # e.g. [["MUSTERI_NO", "\\bMN\\d{8}\\b"]]
+
+network:
+  allowed_host_suffixes: [".svc", ".svc.cluster.local", ".bank.internal"]
+  allow_private_ips: true
+
+observability:
+  otlp_endpoint: ${OTLP_ENDPOINT:-}   # internal collector only, e.g. http://otel-collector.observability.svc:4318/v1/traces
+  metrics_enabled: true
+  trace_sample_ratio: 0.2
+
+dashboard:
+  host: 127.0.0.1
+  port: 8090
+  title: BranchOps Intelligence
+  storage_secret_env: DASHBOARD_STORAGE_SECRET

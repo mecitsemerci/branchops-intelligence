@@ -1,0 +1,15 @@
+.git
+.venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.nicegui
+.remember
+**/__pycache__
+*.pyc
+tests
+docs
+samples
+deploy/openshift
+config/*.yaml
+!config/docker.yaml

@@ -1,0 +1,21 @@
+{
+  "timestamp": 1791979000000,
+  "webhookEvent": "comment_created",
+  "comment": {
+    "id": "50001",
+    "body": "Kasa bilgisayarı yeniden başlatıldı, farklı kartlarla tekrar denendi; kart okuyucu yine okumuyor. Ekran görüntüsü ekte.",
+    "author": {
+      "name": "sube.personeli",
+      "displayName": "Şube Personeli"
+    },
+    "created": "2026-10-14T10:56:40.000+0300",
+    "updated": "2026-10-14T10:56:40.000+0300"
+  },
+  "issue": {
+    "id": "20102",
+    "key": "BOPS-102",
+    "fields": {
+      "summary": "Kart okuyucu kartı okumuyor"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "timestamp": 1791972753000,
+  "webhookEvent": "jira:issue_created",
+  "user": {
+    "name": "sube.personeli",
+    "displayName": "Şube Personeli"
+  },
+  "issue": {
+    "id": "20101",
+    "key": "BOPS-101",
+    "fields": {
+      "summary": "Gişe Ekranı uygulamasında EFT gönderiminde EFT-4012 zaman aşımı hatası",
+      "description": "Gişe Ekranı uygulaması üzerinden müşteri adına EFT gönderimi yapılırken işlem onay adımında hata alınıyor.\nUygulama sürümü: 4.12.3\nHata kodu: EFT-4012 İşlem zaman aşımına uğradı, lütfen tekrar deneyiniz.\nSorun 14.10.2026 09:05 tarihinde başladı ve her işlemde tekrar ediyor.\nTekrarlama adımları:\n1. Gişe Ekranı uygulamasında Para Transferi > EFT menüsü açılır.\n2. Alıcı IBAN ve tutar girilir.\n3. Onayla butonuna basılınca hata alınır.\nTerminal: SB1234-GISE03, Windows 10.\nYeniden başlatma denendi, farklı terminalde de tekrar denendi; sonuç değişmedi.\nMüşteriler kuyrukta bekliyor, şubede EFT işlemleri yapılamıyor.\nHata ekranının ekran görüntüsü ekte.",
+      "status": {
+        "name": "Açık"
+      },
+      "issuetype": {
+        "name": "Olay"
+      },
+      "priority": {
+        "name": "Yüksek"
+      },
+      "labels": [
+        "sube-operasyon"
+      ],
+      "components": [
+        {
+          "name": "Şube Uygulamaları"
+        }
+      ],
+      "reporter": {
+        "name": "sube.personeli",
+        "displayName": "Şube Personeli"
+      },
+      "project": {
+        "key": "BOPS"
+      },
+      "created": "2026-10-14T09:12:33.000+0300",
+      "updated": "2026-10-14T09:12:33.000+0300",
+      "customfield_10101": "1234",
+      "customfield_10102": {
+        "value": "Gişe Ekranı"
+      }
+    }
+  },
+  "issue_event_type_name": "issue_created"
+}

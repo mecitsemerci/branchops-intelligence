@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "branchops-intelligence"
+version = "0.1.0"
+description = "On-premise agentic analysis of Jira operational incidents for bank branch operations."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+    "langgraph>=1.0",
+    "langgraph-checkpoint-postgres>=2.0",
+    "openai>=1.40",
+    "nicegui>=2.0",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-prometheus>=0.48b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "prometheus-client>=0.20",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML",
+]
+
+[project.scripts]
+branchops = "branchops.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/branchops"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "postgres: requires a PostgreSQL database (TEST_DATABASE_URL)",
+    "llm_integration: calls the real internal LLM endpoint (BRANCHOPS_LLM_INTEGRATION=1)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "PL", "N"]
+ignore = [
+    "PLR0913",  # agent/workflow constructors legitimately take many collaborators
+    "PLR2004",  # magic values are fine in scoring tables and tests
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "RUF001",   # Turkish characters in strings are intentional
+    "RUF002",
+    "RUF003",
+    "B008",     # FastAPI Depends()/Query() defaults are idiomatic
+    "PLC0415",  # deliberate lazy imports keep process start-up lean (api/worker/dashboard share a CLI)
+    "PLR0917",
+    "RUF012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLR2004", "S311"]
+"migrations/**" = ["E501"]
+"src/branchops/dashboard/**" = ["E501"]
+"src/branchops/config/settings.py" = ["S105"]  # values are environment-variable NAMES, not secrets
+"src/branchops/infrastructure/llm/mock_provider.py" = ["E501"]  # keyword regex tables
+"src/branchops/application/queries/read_models.py" = ["E501"]  # SQL text
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["branchops"]
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["nicegui.*", "langgraph.*", "opentelemetry.*", "prometheus_client.*"]
+ignore_missing_imports = true
