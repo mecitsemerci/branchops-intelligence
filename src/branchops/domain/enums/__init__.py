@@ -24,7 +24,13 @@ class FieldState(StrEnum):
 
 
 class RubricLevel(StrEnum):
-    """Qualitative level assigned by the quality assessment agent for one field."""
+    """Qualitative level assigned by the quality assessment agent for one field.
+
+    ABSENT      No usable information for the field.
+    POOR        Information is present but vague, generic or hard to act on.
+    ACCEPTABLE  Usable information with gaps (meets the template rubric's "acceptable" description).
+    GOOD        Specific, actionable information (meets the rubric's "good" description).
+    """
 
     ABSENT = "ABSENT"
     POOR = "POOR"
@@ -83,6 +89,15 @@ class JiraEventType:
 
 
 class InboxStatus(StrEnum):
+    """Processing state of an event in the ingestion inbox.
+
+    PENDING      Waiting for a worker (possibly after a retry back-off).
+    PROCESSING   Claimed by a worker under a lease.
+    COMPLETED    Processed successfully.
+    SKIPPED      Not processed (e.g. the record is deleted or unknown).
+    DEAD_LETTER  Failed permanently; needs an operator replay.
+    """
+
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
@@ -91,6 +106,16 @@ class InboxStatus(StrEnum):
 
 
 class AnalysisStatus(StrEnum):
+    """Outcome of one analysis run of an incident.
+
+    RUNNING       The analysis workflow is in progress.
+    COMPLETED     All steps succeeded; scores are final for this input.
+    PARTIAL       Some steps degraded (e.g. a model call failed); scores use the available information.
+    NEEDS_REVIEW  Flagged for a human: classification failed or security flags were raised (e.g. suspected
+                  prompt injection).
+    FAILED        No usable result.
+    """
+
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     PARTIAL = "PARTIAL"
@@ -106,6 +131,15 @@ class StepStatus(StrEnum):
 
 
 class RelationshipType(StrEnum):
+    """Relationship between two incidents found by the similarity step.
+
+    DUPLICATE_CANDIDATE   Very likely the same incident reported again (same branch, symptom and time;
+                          deterministic duplicate gates passed).
+    RELATED               Similar symptom or component, but a different occurrence or branch.
+    UNRELATED             Superficial word overlap only.
+    UNVERIFIED_CANDIDATE  Full-text candidate that the model did not verify.
+    """
+
     DUPLICATE_CANDIDATE = "DUPLICATE_CANDIDATE"
     RELATED = "RELATED"
     UNRELATED = "UNRELATED"

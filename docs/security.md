@@ -38,7 +38,8 @@ scores or credentials.
 | No shell / no autonomous tools | the codebase contains no subprocess/shell execution; agents have no tools; the LLM has no DB or Jira access and cannot modify Jira; no remediation actions exist | design |
 | Secrets hygiene | secrets only via env vars from OpenShift Secrets; config stores env-var **names**; JSON log formatter redacts `token=`, `authorization`, `api_key`, `password`, `secret` patterns; model errors never echo credentials | `infrastructure/observability/logging.py` |
 | Response hardening | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Cache-Control: no-store`, restrictive CSP on the API | `api/middleware` |
-| Production guard rails | `app.environment: production` refuses `auth_mode: dev`, the mock model provider and non-HTTPS model URLs | `config/settings.py` |
+| MCP server (other teams) | Same proxy/loopback trust as the dashboard; IdP groups → `mcp.teams`; per-team row scope enforced as SQL `WHERE` predicates; per-team tool allow-list (hidden tools are not listed and are rejected); `fields: masked` re-masks free text and hides comment authors; MCP-only team roles (team groups never enter `security.role_groups`); masked teams search with digit/`@` tokens dropped; text truncated; per-principal rate limit; request size limit; every tool call audited; no LLM calls and no raw-SQL tool | `mcp/`, `application/queries/scope.py`, [MCP server](mcp-server.md) |
+| Production guard rails | `app.environment: production` refuses `auth_mode: dev`, the mock model provider and non-HTTPS model URLs; `branchops mcp` additionally refuses to start without `mcp.teams` and refuses `--stdio` | `config/settings.py` |
 
 ## Residual risks and operator responsibilities
 
@@ -52,6 +53,9 @@ scores or credentials.
 * **oauth2-proxy skip routes** (`/api/webhooks/jira`, `/health/*`, `/metrics`) bypass SSO by design;
   `--skip-auth-strip-headers` removes forged identity headers on them. `/metrics` exposes only
   aggregate counters; restrict scraping with the monitoring NetworkPolicy.
+* **MCP clients are outside BranchOps' control.** Data returned to a team's MCP client may be sent to that
+  team's model and stored in its chat history. Give each team the narrowest scope and `fields: masked`
+  unless it needs full text, and keep `max_text_chars` low. The MCP rate limit is per replica.
 * Database encryption at rest, backup policies and log retention follow the bank's PostgreSQL and
   logging platform standards.
 * Keep dependencies patched through the internal artifact repository; rebuild the wheelhouse and image

@@ -112,3 +112,35 @@ def inbox_summary(s: Session) -> dict[str, Any]:
             for d in dead
         ],
     }
+
+
+def inbox_health(s: Session, *, worker_window_minutes: int = 5) -> dict[str, Any]:
+    """Queue depth per status/source, dead letters, oldest pending age and recently active workers."""
+    counts = dict(s.execute(select(WebhookInbox.status, func.count()).group_by(WebhookInbox.status)).all())
+    by_source = s.execute(
+        select(WebhookInbox.source, WebhookInbox.status, func.count()).group_by(
+            WebhookInbox.source, WebhookInbox.status
+        )
+    ).all()
+    oldest = s.execute(
+        select(func.extract("epoch", func.now() - func.min(WebhookInbox.received_at))).where(
+            WebhookInbox.status == "PENDING"
+        )
+    ).scalar_one()
+    workers = s.execute(
+        select(func.count(func.distinct(Analysis.worker_id))).where(
+            Analysis.worker_id.is_not(None),
+            func.coalesce(Analysis.heartbeat_at, Analysis.started_at)
+            >= func.now() - func.make_interval(0, 0, 0, 0, 0, max(1, worker_window_minutes)),
+        )
+    ).scalar_one()
+    return {
+        "by_status": {k: int(v) for k, v in counts.items()},
+        "by_source": [{"source": src, "status": st, "count": int(n)} for src, st, n in by_source],
+        "pending": int(counts.get("PENDING", 0)),
+        "processing": int(counts.get("PROCESSING", 0)),
+        "dead_letters": int(counts.get("DEAD_LETTER", 0)),
+        "oldest_pending_seconds": round(float(oldest), 1) if oldest is not None else None,
+        "active_workers": int(workers),
+        "worker_window_minutes": worker_window_minutes,
+    }

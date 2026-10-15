@@ -83,6 +83,9 @@ class Instruments:
     classification_failures: Any
     completeness_score: Any
     quality_score: Any
+    mcp_tool_calls: Any
+    mcp_tool_latency_ms: Any
+    mcp_auth_failures: Any
 
 
 @lru_cache(maxsize=1)
@@ -107,6 +110,13 @@ def get_instruments() -> Instruments:
         classification_failures=m.create_counter("branchops_classification_failures"),
         completeness_score=m.create_histogram("branchops_completeness_score"),
         quality_score=m.create_histogram("branchops_quality_score"),
+        mcp_tool_calls=m.create_counter(
+            "mcp_tool_calls", description="MCP tool calls by tool, team and outcome"
+        ),
+        mcp_tool_latency_ms=m.create_histogram("mcp_tool_latency", unit="ms"),
+        mcp_auth_failures=m.create_counter(
+            "mcp_auth_failures", description="Rejected MCP requests (401/403/429) by reason"
+        ),
     )
 
 

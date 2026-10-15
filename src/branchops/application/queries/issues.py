@@ -9,13 +9,18 @@ from sqlalchemy.orm import Session
 
 from branchops.application.queries._common import _analysis_dict, _r
 from branchops.application.queries.filters import IssueFilter, Page
+from branchops.application.queries.scope import UNRESTRICTED, QueryScope
 from branchops.domain.entities.incident import incident_key as make_incident_key
 from branchops.domain.entities.incident import parse_incident_key
 from branchops.infrastructure.database.models import Analysis, Issue, IssueComment, IssueRelationship
 
 
-def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> Page:
+def list_issues(
+    s: Session, f: IssueFilter, *, low_quality_threshold: float, scope: QueryScope = UNRESTRICTED
+) -> Page:
     conditions: list[Any] = [Issue.is_deleted.is_(False)]
+    if (visible := scope.predicate()) is not None:
+        conditions.append(visible)
     if f.search:
         term = f.search.strip()[:200]
         conditions.append(
@@ -36,6 +41,11 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
         conditions.append(Issue.latest_status == f.status)
     if f.low_quality_only:
         conditions.append(Issue.latest_quality < low_quality_threshold)
+    if f.since_days is not None:
+        conditions.append(
+            func.coalesce(Issue.source_updated_at, Issue.source_created_at, Issue.updated_at)
+            >= func.now() - func.make_interval(0, 0, 0, max(1, f.since_days))
+        )
     sort_col = {
         "updated": func.coalesce(Issue.source_updated_at, Issue.updated_at),
         "quality": Issue.latest_quality,
@@ -52,6 +62,7 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
             Issue.incident_key,
             Issue.source,
             Issue.external_key,
+            Issue.group_key,
             Issue.summary,
             Issue.status,
             Issue.category,
@@ -73,6 +84,7 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
             "incident_key": r.incident_key,
             "source": r.source,
             "external_key": r.external_key,
+            "group_key": r.group_key,
             "issue_key": r.external_key,  # deprecated: use incident_key / external_key
             "summary": r.summary,
             "source_status": r.status,
@@ -91,10 +103,17 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
     return Page(items=items, total=int(total), page=page, page_size=page_size)
 
 
-def issue_detail(s: Session, incident_key: str) -> dict[str, Any] | None:
-    """``incident_key`` like ``snow:INC0012345``; a bare legacy key (``OPS-123``) means Jira."""
+def issue_detail(s: Session, incident_key: str, *, scope: QueryScope = UNRESTRICTED) -> dict[str, Any] | None:
+    """``incident_key`` like ``snow:INC0012345``; a bare legacy key (``OPS-123``) means Jira.
+
+    Out-of-scope incidents are reported as absent (``None``), and related incidents outside the scope are
+    left out of ``relationships``.
+    """
     key = make_incident_key(*parse_incident_key(incident_key))
-    issue = s.get(Issue, key)
+    visible = scope.predicate()
+    issue = s.execute(
+        select(Issue).where(Issue.incident_key == key, *([visible] if visible is not None else []))
+    ).scalar_one_or_none()
     if issue is None or issue.is_deleted:
         return None
     latest = s.get(Analysis, issue.latest_analysis_id) if issue.latest_analysis_id else None
@@ -129,6 +148,7 @@ def issue_detail(s: Session, incident_key: str) -> dict[str, Any] | None:
                 IssueRelationship.target_incident_key == key,
             ),
             Issue.is_deleted.is_(False),
+            *([visible] if visible is not None else []),
         )
         .order_by(IssueRelationship.text_rank.desc())
     ).all()

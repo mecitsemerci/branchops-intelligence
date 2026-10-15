@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, literal_column, select, text
+from sqlalchemy import and_, func, literal_column, select, text
 from sqlalchemy.orm import Session
 
 from branchops.application.queries._common import _r
+from branchops.application.queries.scope import UNRESTRICTED, QueryScope
 from branchops.infrastructure.database.models import Issue
 
 
@@ -25,8 +26,12 @@ class Overview:
     daily_trend: list[dict[str, Any]] = field(default_factory=list)
 
 
-def overview(s: Session, *, days: int = 30, low_quality_threshold: float) -> Overview:
-    active = Issue.is_deleted.is_(False)
+def overview(
+    s: Session, *, days: int = 30, low_quality_threshold: float, scope: QueryScope = UNRESTRICTED
+) -> Overview:
+    visible = scope.predicate()
+    active = Issue.is_deleted.is_(False) if visible is None else and_(Issue.is_deleted.is_(False), visible)
+    scope_sql, scope_params = scope.sql()
     row = s.execute(
         select(
             func.count(),
@@ -59,10 +64,13 @@ def overview(s: Session, *, days: int = 30, low_quality_threshold: float) -> Ove
                        count(*) AS issues, avg(latest_completeness) AS completeness, avg(latest_quality) AS quality
                 FROM issues
                 WHERE NOT is_deleted AND coalesce(source_created_at, created_at) >= now() - make_interval(days => :days)
+                """
+            + scope_sql
+            + """
                 GROUP BY 1 ORDER BY 1
                 """
         ),
-        {"days": days},
+        {"days": days, **scope_params},
     ).all()
     return Overview(
         total_issues=int(row[0]),

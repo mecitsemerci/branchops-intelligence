@@ -14,16 +14,21 @@ flowchart TB
         subgraph dpod[branchops-dashboard ×1]
             P2[oauth2-proxy :8443] --> D[dashboard 127.0.0.1:8090]
         end
+        subgraph mpod[branchops-mcp ×2..4 HPA]
+            P3[oauth2-proxy :8443] --> M[mcp 127.0.0.1:8095]
+        end
         J[[Job branchops-migrate]]
     end
-    R[OpenShift Router] -->|reencrypt| P1 & P2
-    A & W & D & J --> PG[(bank PostgreSQL :5432)]
+    R[OpenShift Router] -->|reencrypt| P1 & P2 & P3
+    C[consumer team namespaces] --> P3
+    A & W & D & M & J --> PG[(bank PostgreSQL :5432)]
     W --> LLM[ai-platform: LLM gateway :443]
-    P1 & P2 --> SSO[sso: OIDC IdP]
-    Prom[monitoring] --> P1 & W
+    P1 & P2 & P3 --> SSO[sso: OIDC IdP]
+    Prom[monitoring] --> P1 & W & P3
 ```
 
-One image, four commands (`api`, `worker`, `dashboard`, `migrate`). The LLM is **not** deployed here;
+One image, five commands (`api`, `worker`, `dashboard`, `mcp`, `migrate`); see [MCP server](mcp-server.md)
+for the MCP consumers' NetworkPolicy and team configuration. The LLM is **not** deployed here;
 the worker calls the existing gateway configured through `LLM_BASE_URL`.
 
 ## 1. Build the wheelhouse (connected build zone)
@@ -84,7 +89,7 @@ labels in `networkpolicies.yaml` (`db-shared`, `ai-platform`, `sso`, `observabil
 ```bash
 oc apply -k deploy/openshift/overlays/production     # includes the migrate Job (Argo CD PreSync hook)
 oc wait --for=condition=complete job/branchops-migrate --timeout=300s
-oc rollout status deploy/branchops-api deploy/branchops-worker deploy/branchops-dashboard
+oc rollout status deploy/branchops-api deploy/branchops-worker deploy/branchops-dashboard deploy/branchops-mcp
 oc exec deploy/branchops-worker -- branchops llm health
 ```
 
@@ -97,6 +102,7 @@ Without Argo CD, delete and re-create the Job for every release before rolling o
 | api | 100m/256Mi → 1 CPU/512Mi (+ proxy 20m/32Mi) | startup `/health/startup`, readiness `/health/ready` (DB ping), liveness `/health/live` — via proxy skip-auth routes | 2 replicas, PDB minAvailable 1 |
 | worker | 100m/384Mi → 1 CPU/768Mi | `/healthz` (poll loop alive), `/readyz` (DB reachable) on :8081 | HPA 2–6 on CPU; throughput is bounded by `worker.concurrency × replicas` and the gateway's capacity |
 | dashboard | 100m/256Mi → 1 CPU/512Mi | `/health/live`, `/health/ready` | 1 replica (NiceGUI state is per process; use Route session affinity if scaled) |
+| mcp | 100m/192Mi → 1 CPU/512Mi (+ proxy 20m/32Mi) | `/healthz`, `/readyz` (DB ping) via proxy skip-auth routes | HPA 2–4 on CPU; stateless streamable HTTP, no session affinity; rate limit is per replica |
 
 Worker scaling note: LLM-bound work is I/O-heavy, so CPU-based HPA reacts slowly. Watch
 `branchops_inbox_depth{status="PENDING"}` and `branchops_inbox_oldest_pending_seconds`; raise

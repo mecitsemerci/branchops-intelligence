@@ -97,11 +97,12 @@ endif
 .PHONY: up
 up: model ## Start the stack (LLM_MODE=host|docker|mock, WORKERS=n); simulator posts every 5 min
 	$(COMPOSE) $(if $(filter docker,$(LLM_MODE)),--profile ollama) up -d --build --wait --scale worker=$(WORKERS) \
-	  postgres migrate api worker dashboard simulator $(if $(filter docker,$(LLM_MODE)),ollama)
+	  postgres migrate api worker dashboard mcp simulator $(if $(filter docker,$(LLM_MODE)),ollama)
 	@echo ""
 	@echo "  Live agents  http://localhost:$${DASHBOARD_PORT:-8090}/live"
 	@echo "  Dashboard    http://localhost:$${DASHBOARD_PORT:-8090}"
 	@echo "  API          http://localhost:$${API_PORT:-8080}   (health: /health/ready, metrics: /metrics)"
+	@echo "  MCP server   http://localhost:$${MCP_PORT:-8095}/mcp   (dev auth; health: /readyz)"
 	@echo "  Postgres     localhost:$(POSTGRES_PORT)  (branchops/branchops)"
 	@echo "  Model        $(LLM_MODE) · $${LLM_MODEL:-$(OLLAMA_MODEL)} · $(LLM_BASE_URL)"
 	@echo "  Simulator    one random incident every $${SIMULATOR_INTERVAL_SECONDS:-300}s (make sim-once for one now)"
@@ -129,15 +130,15 @@ clean-docker: ## Stop the stack and delete the database (and in-docker model) vo
 	$(COMPOSE) --profile ollama down -v --remove-orphans
 
 .PHONY: restart
-restart: ## Restart api, worker and dashboard
-	$(COMPOSE) restart api worker dashboard
+restart: ## Restart api, worker, dashboard and mcp
+	$(COMPOSE) restart api worker dashboard mcp
 
 .PHONY: ps
 ps: ## Show service status
 	$(COMPOSE) ps
 
 .PHONY: logs
-logs: ## Follow logs (SERVICE=api|worker|dashboard|simulator|migrate|postgres to filter)
+logs: ## Follow logs (SERVICE=api|worker|dashboard|mcp|simulator|migrate|postgres to filter)
 	$(COMPOSE) logs -f --tail=100 $(SERVICE)
 
 .PHONY: migrate
@@ -149,10 +150,18 @@ seed: ## Send signed sample Jira webhooks to the API
 	$(PYTHON) scripts/send_samples.py --url $(API_URL) --secret $(WEBHOOK_SECRET)
 
 .PHONY: health
-health: ## Probe api, worker and dashboard health endpoints
+health: mcp-health ## Probe api, worker, dashboard and mcp health endpoints
 	@curl -fsS $(API_URL)/health/ready && echo "  <- api"
 	@$(COMPOSE) exec -T worker python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8081/readyz').read().decode())" && echo "  <- worker"
 	@curl -fsS http://localhost:$${DASHBOARD_PORT:-8090}/health/ready && echo "  <- dashboard"
+
+.PHONY: mcp-health
+mcp-health: ## Probe the MCP server (readiness + tools/list over streamable HTTP)
+	@curl -fsS http://localhost:$${MCP_PORT:-8095}/readyz && echo "  <- mcp"
+	@curl -fsS http://localhost:$${MCP_PORT:-8095}/mcp -H 'content-type: application/json' \
+	  -H 'accept: application/json, text/event-stream' \
+	  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+	  | $(PYTHON) -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']), 'tools')" && echo "  <- mcp tools"
 
 .PHONY: overview
 overview: ## Print the analytics overview from the API
@@ -171,13 +180,15 @@ llm-health: ## Check the configured model endpoint from inside the stack
 	$(COMPOSE) exec worker branchops llm health
 
 ##@ Run from the virtualenv (against `make db`)
-.PHONY: run-api run-worker run-dashboard
+.PHONY: run-api run-worker run-dashboard run-mcp
 run-api: ## branchops api with config/local.yaml
 	BRANCHOPS_CONFIG=config/local.yaml JIRA_WEBHOOK_SECRETS=$(WEBHOOK_SECRET) $(BIN)/branchops api
 run-worker: ## branchops worker with config/local.yaml
 	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops worker
 run-dashboard: ## branchops dashboard with config/local.yaml
 	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops dashboard
+run-mcp: ## branchops mcp (read-only MCP server on 127.0.0.1:8095/mcp) with config/local.yaml
+	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops mcp
 
 ##@ Release (air-gapped)
 .PHONY: lock

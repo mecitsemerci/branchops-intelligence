@@ -8,10 +8,15 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from branchops.application.queries._common import _r
+from branchops.application.queries.scope import UNRESTRICTED, QueryScope
 
 
-def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: float) -> dict[str, Any]:
-    params = {"days": days}
+def quality_analytics(
+    s: Session, *, days: int = 90, low_quality_threshold: float, scope: QueryScope = UNRESTRICTED
+) -> dict[str, Any]:
+    scope_sql, scope_params = scope.sql()
+    scope_i_sql, _ = scope.sql("i")
+    params: dict[str, Any] = {"days": days, **scope_params}
     by_category = s.execute(
         text(
             """
@@ -19,6 +24,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                        avg(latest_completeness) AS completeness, avg(latest_quality) AS quality
                 FROM issues WHERE NOT is_deleted AND latest_analysis_id IS NOT NULL
                   AND coalesce(source_created_at, created_at) >= now() - make_interval(days => :days)
+                """
+            + scope_sql
+            + """
                 GROUP BY 1 ORDER BY quality NULLS LAST
                 """
         ),
@@ -31,6 +39,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                        avg(latest_completeness) AS completeness, avg(latest_quality) AS quality
                 FROM issues WHERE NOT is_deleted AND latest_analysis_id IS NOT NULL
                   AND coalesce(source_created_at, created_at) >= now() - make_interval(days => :days)
+                """
+            + scope_sql
+            + """
                 GROUP BY 1 ORDER BY n DESC LIMIT 25
                 """
         ),
@@ -44,6 +55,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                 CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(a.missing_fields, '[]'::jsonb)) AS f
                 WHERE NOT i.is_deleted
                   AND coalesce(i.source_created_at, i.created_at) >= now() - make_interval(days => :days)
+                """
+            + scope_i_sql
+            + """
                 GROUP BY f ORDER BY n DESC LIMIT 15
                 """
         ),
@@ -65,6 +79,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                 JOIN issues i ON i.incident_key = f.incident_key AND NOT i.is_deleted
                 WHERE f.first_rn = 1 AND l.started_at > f.started_at
                   AND l.started_at >= now() - make_interval(days => :days)
+                """
+            + scope_i_sql
+            + """
                 ORDER BY (l.quality_score - f.quality_score) DESC LIMIT 20
                 """
         ),
@@ -82,6 +99,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                 FROM issues
                 WHERE NOT is_deleted AND error_signature IS NOT NULL
                   AND coalesce(source_created_at, created_at) >= now() - make_interval(days => :days)
+                """
+            + scope_sql
+            + """
                 GROUP BY error_signature HAVING count(*) >= 2
                 ORDER BY n DESC LIMIT 20
                 """
@@ -135,3 +155,66 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
             for r in recurring
         ],
     }
+
+
+def recurring_errors(
+    s: Session,
+    *,
+    days: int = 30,
+    min_count: int = 3,
+    branch_code: str | None = None,
+    application: str | None = None,
+    limit: int = 50,
+    scope: QueryScope = UNRESTRICTED,
+) -> list[dict[str, Any]]:
+    """Incidents grouped by ``error_signature`` with at least ``min_count`` occurrences in ``days``."""
+    scope_sql, scope_params = scope.sql()
+    filters = ""
+    params: dict[str, Any] = {
+        "days": days,
+        "min_count": max(1, min_count),
+        "limit": max(1, min(limit, 200)),
+        **scope_params,
+    }
+    if branch_code:
+        filters += " AND branch_code = :branch_code"
+        params["branch_code"] = branch_code
+    if application:
+        filters += " AND application ILIKE :application"
+        params["application"] = f"%{application[:100]}%"
+    rows = s.execute(
+        text(
+            """
+                SELECT error_signature, count(*) AS n,
+                       min(coalesce(source_created_at, created_at)) AS first_seen,
+                       max(coalesce(source_created_at, created_at)) AS last_seen,
+                       array_agg(DISTINCT branch_code) FILTER (WHERE branch_code IS NOT NULL) AS branches,
+                       array_agg(DISTINCT application) FILTER (WHERE application IS NOT NULL) AS applications,
+                       array_agg(DISTINCT source) AS sources,
+                       (array_agg(incident_key ORDER BY coalesce(source_created_at, created_at) DESC))[1:20] AS incident_keys
+                FROM issues
+                WHERE NOT is_deleted AND error_signature IS NOT NULL
+                  AND coalesce(source_created_at, created_at) >= now() - make_interval(days => :days)
+                """
+            + filters
+            + scope_sql
+            + """
+                GROUP BY error_signature HAVING count(*) >= :min_count
+                ORDER BY n DESC, last_seen DESC LIMIT :limit
+                """
+        ),
+        params,
+    ).all()
+    return [
+        {
+            "error_signature": r.error_signature,
+            "count": int(r.n),
+            "first_seen": r.first_seen.isoformat() if r.first_seen else None,
+            "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+            "branch_codes": sorted(r.branches or []),
+            "applications": sorted(r.applications or []),
+            "sources": sorted(r.sources or []),
+            "incident_keys": list(r.incident_keys or []),
+        }
+        for r in rows
+    ]

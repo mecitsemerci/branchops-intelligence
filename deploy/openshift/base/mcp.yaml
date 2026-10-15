@@ -1,0 +1,153 @@
+# MCP server: `branchops mcp` bound to 127.0.0.1:8095 behind an oauth2-proxy sidecar (same pattern as the
+# dashboard). MCP clients send `Authorization: Bearer <access token issued by the bank IdP>`; oauth2-proxy
+# validates it (--skip-jwt-bearer-tokens) and forwards X-Forwarded-User / X-Forwarded-Groups, which the app
+# trusts only from loopback and maps to `mcp.teams`. /mcp never redirects to a login page (--api-route).
+# Stateless streamable HTTP: replicas need no session affinity. The rate limit is per replica.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: branchops-mcp
+  labels: {app.kubernetes.io/name: branchops-mcp, app.kubernetes.io/component: mcp}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: branchops-mcp}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: branchops-mcp, app.kubernetes.io/component: mcp}
+    spec:
+      serviceAccountName: branchops-mcp
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: mcp
+          image: branchops-intelligence
+          args: ["mcp"]
+          env:
+            - {name: FASTMCP_CHECK_FOR_UPDATES, value: "off"}
+            - {name: FASTMCP_SHOW_CLI_BANNER, value: "false"}
+            - {name: FASTMCP_HOME, value: /tmp/fastmcp}
+          envFrom:
+            - secretRef: {name: branchops-secrets}
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: config, mountPath: /app/config, readOnly: true}
+            - {name: ca-bundle, mountPath: /etc/pki/bank, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+        - name: oauth2-proxy
+          image: oauth2-proxy
+          args:
+            - --http-address=
+            - --https-address=0.0.0.0:8443
+            - --tls-cert-file=/etc/tls/private/tls.crt
+            - --tls-key-file=/etc/tls/private/tls.key
+            - --upstream=http://127.0.0.1:8095/
+            - --redirect-url=https://branchops-mcp.apps.bank.internal/oauth2/callback
+            - --skip-jwt-bearer-tokens=true
+            - --api-route=^/mcp
+            - --skip-auth-route=GET=^/(healthz|readyz|metrics)$
+            - --reverse-proxy=false
+          env:
+            # Only members of an MCP team may pass the proxy (the app checks teams again -> 403).
+            - name: OAUTH2_PROXY_ALLOWED_GROUPS
+              value: branchops-branch-ops,branchops-app-support,branchops-audit
+            # Audience of the access tokens MCP clients obtain from the IdP (client credentials / device flow).
+            - name: OAUTH2_PROXY_OIDC_EXTRA_AUDIENCES
+              value: branchops-mcp
+          envFrom:
+            - configMapRef: {name: oauth2-proxy-config}
+            - secretRef: {name: oauth2-proxy-secrets}
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8443, scheme: HTTPS}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8443, scheme: HTTPS}
+            periodSeconds: 20
+          startupProbe:
+            httpGet: {path: /healthz, port: 8443, scheme: HTTPS}
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: proxy-tls, mountPath: /etc/tls/private, readOnly: true}
+            - {name: ca-bundle, mountPath: /etc/pki/bank, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: branchops-config}}
+        - {name: ca-bundle, configMap: {name: bank-ca-bundle, items: [{key: ca-bundle.crt, path: ca-bundle.crt}]}}
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+        - {name: proxy-tls, secret: {secretName: branchops-mcp-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: branchops-mcp
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: branchops-mcp-tls
+  labels: {app.kubernetes.io/name: branchops-mcp}
+spec:
+  selector: {app.kubernetes.io/name: branchops-mcp}
+  ports:
+    - {name: https, port: 443, targetPort: 8443}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: branchops-mcp
+  annotations:
+    haproxy.router.openshift.io/hsts_header: max-age=31536000
+    haproxy.router.openshift.io/timeout: 60s
+spec:
+  host: branchops-mcp.apps.bank.internal
+  to: {kind: Service, name: branchops-mcp}
+  port: {targetPort: https}
+  tls: {termination: reencrypt, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: branchops-mcp}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: branchops-mcp}
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: branchops-mcp}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: branchops-mcp}
+---
+# Ingress to the MCP proxy port only from the consuming teams' namespaces (in-cluster chatbots, agents) and,
+# for desktop clients (Claude Desktop / Code, Cursor) that come through the Route, from the router. Replace
+# the placeholder selector with the real namespaces in the overlay; drop the router rule if every consumer
+# runs in-cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: branchops-mcp-allow-consumers}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: branchops-mcp}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {branchops.bank.internal/mcp-consumer: "true"}}
+        - namespaceSelector: {matchLabels: {policy-group.network.openshift.io/ingress: ""}}
+      ports:
+        - {protocol: TCP, port: 8443}

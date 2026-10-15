@@ -24,6 +24,8 @@ class AuthenticationError(Exception):
 class Principal:
     username: str
     roles: frozenset[Role]
+    # IdP groups as sent by the proxy (used for MCP team resolution).
+    groups: frozenset[str] = frozenset()
 
     def has(self, required: Role) -> bool:
         return any(_ROLE_RANK[r] >= _ROLE_RANK[required] for r in self.roles)
@@ -33,7 +35,7 @@ def resolve_principal(
     headers: Mapping[str, str], client_host: str | None, settings: SecuritySettings
 ) -> Principal:
     if settings.auth_mode == "dev":
-        return Principal(settings.dev_user, frozenset(settings.dev_roles))
+        return Principal(settings.dev_user, frozenset(settings.dev_roles), frozenset(settings.dev_groups))
     if client_host not in settings.trusted_proxy_hosts:
         raise AuthenticationError("request did not come through the authentication proxy")
     lower = {k.lower(): v for k, v in headers.items()}
@@ -44,4 +46,4 @@ def resolve_principal(
     roles = frozenset(role for role, names in settings.role_groups.items() if groups & set(names))
     if not roles:
         raise AuthenticationError("user is not a member of any BranchOps group")
-    return Principal(user[:200], roles)
+    return Principal(user[:200], roles, frozenset(groups))

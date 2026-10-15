@@ -187,6 +187,18 @@ def signal_stop(stop: Callable[[], None]) -> None:
     signal.signal(signal.SIGINT, handler)
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Read-only MCP server for other teams' MCP clients (streamable HTTP; ``--stdio`` for local dev)."""
+    from branchops.mcp.server import run
+
+    settings = _settings(args)
+    if args.stdio and settings.app.environment == "production":
+        print("--stdio is for local development only; refused in production", file=sys.stderr)
+        return 1
+    run(settings, stdio=args.stdio)
+    return 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     from branchops.dashboard.app import run_dashboard
 
@@ -354,6 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("api", help="run the FastAPI web application").set_defaults(func=cmd_api)
     sub.add_parser("worker", help="run the background inbox worker").set_defaults(func=cmd_worker)
     sub.add_parser("dashboard", help="run the NiceGUI dashboard").set_defaults(func=cmd_dashboard)
+    mcp = sub.add_parser("mcp", help="run the read-only MCP server (streamable HTTP)")
+    mcp.add_argument("--stdio", action="store_true", help="serve over stdio (local development only)")
+    mcp.set_defaults(func=cmd_mcp)
     imp = sub.add_parser("import", help="import a CSV/XLSX/JSONL file through a file-based source")
     imp.add_argument("--source", required=True, help="id of an enabled csv_import source")
     imp.add_argument("path")
