@@ -219,7 +219,8 @@ dashboard:
   public_url: null
   storage_secret_env: DASHBOARD_STORAGE_SECRET
 
-# Read-only MCP server (`branchops mcp`, docs/mcp-server.md). Callers authenticate through the oauth2-proxy
+# MCP server (`branchops mcp`, docs/mcp-server.md); read-mostly: queries plus in-app incident reporting and
+# re-analysis requests. Callers authenticate through the oauth2-proxy
 # sidecar like dashboard users; their IdP groups select a team. A team's `role` applies in the MCP server
 # only (default VIEWER; request_reanalysis needs ANALYST, get_inbox_health ADMIN or ops_access) - never add
 # team groups to security.role_groups, that would open the unscoped API/dashboard to them.

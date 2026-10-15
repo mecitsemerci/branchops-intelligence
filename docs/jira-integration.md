@@ -1,15 +1,17 @@
 # Jira integration
 
 Jira is one of several incident sources (see [sources](sources.md)): the `jira_webhook` adapter. Webhooks
-are the only Jira ingestion mechanism; BranchOps never calls the Jira REST API and never modifies Jira
-issues. Jira records are identified as `jira:<issue key>` (e.g. `jira:BOPS-101`); API and dashboard URLs
+are the only Jira ingestion mechanism: for ingestion BranchOps never calls the Jira REST API. The optional
+ticketing sink ([MCP server](mcp-server.md), "Ticketing") creates tickets, comments and attachments for
+MCP-reported incidents; those tickets carry the `branchops-reported` label. Exclude that label (or the
+project) from the Jira source, otherwise a ticket is ingested back as a separate `jira:` incident. Jira records are identified as `jira:<issue key>` (e.g. `jira:BOPS-101`); API and dashboard URLs
 still accept the bare issue key.
 
 ## Configuring the webhook in Jira
 
 | Setting | Value |
 |---|---|
-| URL | `https://branchops-api.apps.bank.internal/api/ingest/jira` (the legacy `…/api/webhooks/jira` stays valid) |
+| URL | `https://branchops-api.apps.bank.internal/api/ingest/jira` (primary; the legacy `…/api/webhooks/jira` remains valid). Both bypass SSO and are authenticated by the source's HMAC/token |
 | Events | Issue: created, updated, deleted · Comment: created, updated, deleted |
 | JQL filter (recommended) | `project in (BOPS, …)` — only branch-operations projects |
 | Secret (Jira DC 10+ / Cloud) | a value from `JIRA_WEBHOOK_SECRETS` → Jira sends `X-Hub-Signature: sha256=<hmac>` |

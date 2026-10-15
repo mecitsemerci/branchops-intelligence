@@ -281,7 +281,7 @@ def signal_stop(stop: Callable[[], None]) -> None:
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
-    """Read-only MCP server for other teams' MCP clients (streamable HTTP; ``--stdio`` for local dev)."""
+    """MCP server for other teams' MCP clients (streamable HTTP; ``--stdio`` for local dev)."""
     from branchops.mcp.server import run
 
     settings = _settings(args)
@@ -485,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("api", help="run the FastAPI web application").set_defaults(func=cmd_api)
     sub.add_parser("worker", help="run the background inbox worker").set_defaults(func=cmd_worker)
     sub.add_parser("dashboard", help="run the NiceGUI dashboard").set_defaults(func=cmd_dashboard)
-    mcp = sub.add_parser("mcp", help="run the read-only MCP server (streamable HTTP)")
+    mcp = sub.add_parser("mcp", help="run the MCP server (queries, in-app reporting, re-analysis)")
     mcp.add_argument("--stdio", action="store_true", help="serve over stdio (local development only)")
     mcp.set_defaults(func=cmd_mcp)
     imp = sub.add_parser("import", help="import a CSV/XLSX/JSONL file through a file-based source")
