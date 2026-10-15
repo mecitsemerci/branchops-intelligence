@@ -17,6 +17,8 @@ class IssueFilter:
     application: str | None = None
     status: str | None = None
     low_quality_only: bool = False
+    # Only incidents created or updated in the last N days (by source timestamps); None = no limit.
+    since_days: int | None = None
     sort: SortField = "updated"
     descending: bool = True
     page: int = 1

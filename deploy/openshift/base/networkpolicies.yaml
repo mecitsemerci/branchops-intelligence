@@ -37,14 +37,14 @@ spec:
       ports:
         - {protocol: TCP, port: 8443}
 ---
-# In-cluster Prometheus scraping (/metrics on the API proxy port and the worker health port).
+# In-cluster Prometheus scraping (/metrics on the API and MCP proxy ports and the worker health port).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: branchops-allow-monitoring}
 spec:
   podSelector:
     matchExpressions:
-      - {key: app.kubernetes.io/name, operator: In, values: [branchops-api, branchops-worker]}
+      - {key: app.kubernetes.io/name, operator: In, values: [branchops-api, branchops-worker, branchops-mcp]}
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -62,7 +62,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [branchops-api, branchops-worker, branchops-dashboard, branchops-migrate]
+        values: [branchops-api, branchops-worker, branchops-dashboard, branchops-mcp, branchops-migrate]
   policyTypes: [Egress]
   egress:
     - to:
@@ -94,7 +94,9 @@ metadata: {name: branchops-allow-sso-and-otel}
 spec:
   podSelector:
     matchExpressions:
-      - {key: app.kubernetes.io/name, operator: In, values: [branchops-api, branchops-dashboard, branchops-worker]}
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [branchops-api, branchops-dashboard, branchops-worker, branchops-mcp]
   policyTypes: [Egress]
   egress:
     - to:

@@ -58,3 +58,20 @@ def test_default_settings_have_no_external_exporters() -> None:
     settings = make_settings()
     assert settings.observability.otlp_endpoint is None
     assert settings.llm.base_url is None
+
+
+def test_mcp_server_never_checks_for_fastmcp_updates() -> None:
+    import subprocess
+    import sys
+
+    code = "import branchops.mcp.server, fastmcp; print(fastmcp.settings.check_for_updates)"
+    out = subprocess.run(  # noqa: S603 - fixed interpreter and code, fresh process for import-time settings
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=ROOT, timeout=60
+    )
+    assert out.stdout.strip() == "off"
+
+
+def test_mcp_server_has_no_raw_query_tool() -> None:
+    from branchops.mcp.tools import TOOL_NAMES
+
+    assert not {n for n in TOOL_NAMES if "sql" in n or n in {"query", "execute", "run_query"}}

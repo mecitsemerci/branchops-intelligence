@@ -1,4 +1,4 @@
-# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard + simulator.
+# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard + MCP server + simulator.
 #
 #   make up                    # Gemma via host Ollama (default), simulator posts an incident every 5 min
 #   make up LLM_MODE=docker    # Gemma in the `ollama` compose service (CPU in Docker)
@@ -102,6 +102,25 @@ services:
       migrate: {condition: service_completed_successfully}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Read-only MCP server for MCP clients (Claude Desktop/Code, Cursor): http://localhost:8095/mcp.
+  # Dev auth (config/docker.yaml): every caller is the dev principal; published on loopback only.
+  mcp:
+    <<: *app
+    command: ["mcp"]
+    environment:
+      <<: *app-env
+      FASTMCP_CHECK_FOR_UPDATES: "off"
+      FASTMCP_HOME: /tmp/fastmcp
+    ports: ["127.0.0.1:${MCP_PORT:-8095}:8095"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/readyz', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 5

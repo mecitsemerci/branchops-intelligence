@@ -160,3 +160,40 @@ dashboard:
   port: 8090
   title: BranchOps Intelligence
   storage_secret_env: DASHBOARD_STORAGE_SECRET
+
+# Read-only MCP server (`branchops mcp`, docs/mcp-server.md). Callers authenticate through the oauth2-proxy
+# sidecar like dashboard users; their IdP groups select a team. A team's `role` applies in the MCP server
+# only (default VIEWER; request_reanalysis needs ANALYST, get_inbox_health ADMIN or ops_access) - never add
+# team groups to security.role_groups, that would open the unscoped API/dashboard to them.
+# "*" = unrestricted. Scopes are enforced in SQL.
+mcp:
+  host: 127.0.0.1
+  port: 8095
+  max_page_size: 50
+  max_text_chars: 4000             # longer description/comment text is truncated (and marked) in tool output
+  rate_limit_per_minute: 120       # per principal and replica
+  teams:
+    - id: branch-ops
+      groups: [branchops-branch-ops]
+      sources: ["*"]
+      group_keys: ["*"]
+      branch_codes: ["*"]
+      fields: full                 # full | masked (masked: PII masking re-applied, comment authors hidden)
+      tools: ["*"]
+      role: ANALYST                # MCP-only role of the team's members (default VIEWER)
+    - id: app-support
+      groups: [branchops-app-support]
+      sources: [jira, snow]
+      group_keys: [OPS, APP]
+      branch_codes: ["*"]
+      fields: masked
+      tools: [search_incidents, get_incident, get_incident_analysis, find_similar_incidents,
+              list_recurring_errors, get_template, list_templates]
+    - id: audit
+      groups: [branchops-audit]
+      sources: ["*"]
+      group_keys: ["*"]
+      branch_codes: ["*"]
+      fields: full
+      tools: ["*"]
+      ops_access: true             # get_inbox_health without the ADMIN role

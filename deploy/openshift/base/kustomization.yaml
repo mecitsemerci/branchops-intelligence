@@ -9,6 +9,7 @@ resources:
   - api.yaml
   - worker.yaml
   - dashboard.yaml
+  - mcp.yaml
   - networkpolicies.yaml
   - migrate-job.yaml
 configMapGenerator:

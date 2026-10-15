@@ -19,6 +19,8 @@ flowchart LR
     W[Worker · LangGraph] -->|FOR UPDATE SKIP LOCKED| PG
     W -->|OpenAI-compatible, TLS| M[Internal LLM gateway<br/>GLM-5.3-Flash]
     D[Dashboard · NiceGUI] --> PG
+    C[Other teams' MCP clients] -->|SSO bearer token| X[MCP server · read-only]
+    X -->|team-scoped SQL| PG
 ```
 
 ## Features
@@ -36,6 +38,7 @@ flowchart LR
 | Evidence verification (anti-hallucination), PII masking, prompt-injection flags | `domain/services/` |
 | Similar / duplicate / recurring incidents (PostgreSQL FTS `turkish` + error signatures) | `agents/similarity.py`, `issue_repository.py` |
 | Dashboard: overview, explorer, issue detail, quality analytics, agent executions, dead letters | `dashboard/` |
+| Read-only MCP server for other teams (Claude, Cursor, chatbots): team-scoped tools, resources, prompts; audited | `mcp/`, [docs](docs/mcp-server.md) |
 | OpenTelemetry metrics (Prometheus) and traces (internal OTLP only) | `infrastructure/observability/` |
 | OpenShift manifests: non-root, read-only FS, probes, NetworkPolicies, HPA, oauth2-proxy SSO | `deploy/openshift/` |
 
@@ -80,6 +83,7 @@ Other targets: `make seed` (fixed samples), `make overview`, `make up WORKERS=3`
 |---|---|---|
 | api | http://localhost:8080 | `/api/webhooks/jira`, `/api/*`, `/health/*`, `/metrics` |
 | dashboard | http://localhost:8090 | dev auth (ADMIN) |
+| mcp | http://localhost:8095/mcp | read-only MCP server, dev auth (`make mcp-health`) |
 | worker | :8081 inside the container | `/healthz`, `/readyz`, `/metrics` (`make health`) |
 | simulator | — | posts random incidents to the api (`simulate` command) |
 | postgres | localhost:55432 | `branchops/branchops`, databases `branchops` and `branchops_test` |
@@ -100,7 +104,7 @@ The compose build uses the same Dockerfile as production with `WHEELHOUSE_SOURCE
 make install     # .venv + project + dev tools
 make db          # only PostgreSQL from compose
 BRANCHOPS_CONFIG=config/local.yaml .venv/bin/branchops migrate
-make run-api     # / make run-worker / make run-dashboard  (config/local.yaml, mock model)
+make run-api     # / make run-worker / make run-dashboard / make run-mcp  (config/local.yaml, mock model)
 make check       # ruff + mypy --strict + all tests (unit + PostgreSQL integration)
 ```
 
@@ -113,6 +117,7 @@ make check       # ruff + mypy --strict + all tests (unit + PostgreSQL integrati
 | `branchops import --source csv <file>` | Import a CSV/XLSX/JSONL file through a file-based source (`--dry-run` validates only) |
 | `branchops poll [--source id] [--once]` | Read pull sources on their schedule; one leader across replicas (advisory lock) |
 | `branchops dashboard` | NiceGUI dashboard |
+| `branchops mcp [--stdio]` | Read-only MCP server (streamable HTTP on `mcp.host:port/mcp`; `--stdio` for local development only) |
 | `branchops migrate` | DB migrations, checkpoint tables, template publication (immutability check) |
 | `branchops templates` | Validate and list templates |
 | `branchops llm health\|probe` | Model gateway health / capability detection |
@@ -140,6 +145,7 @@ CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite dro
 * [Templates](docs/templates.md) — template format and how to add one
 * [Scoring](docs/scoring.md) — completeness/quality formulas and policies
 * [Model integration](docs/model-integration.md) — gateway configuration, capabilities, fallbacks
+* [MCP server](docs/mcp-server.md) — connecting MCP clients, team scopes, tool catalogue, audit
 * [Security](docs/security.md) — controls and threat model
 * [OpenShift deployment](docs/openshift-deployment.md) — offline build and deployment
 * [Evaluation](docs/evaluation.md) — test strategy, synthetic data, model evaluation

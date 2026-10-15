@@ -13,3 +13,13 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 3
+  # MCP consumers: the namespaces of the teams allowed to call the MCP server in-cluster (plus the router
+  # for desktop clients). Keep in sync with `mcp.teams` in branchops.yaml.
+  - target: {kind: NetworkPolicy, name: branchops-mcp-allow-consumers}
+    patch: |-
+      - op: replace
+        path: /spec/ingress/0/from
+        value:
+          - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: app-support-tools}}
+          - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: internal-chatbot}}
+          - namespaceSelector: {matchLabels: {policy-group.network.openshift.io/ingress: ""}}
