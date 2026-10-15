@@ -8,6 +8,7 @@ from typing import TypeVar
 
 from sqlalchemy.orm import Session
 
+from branchops.application.commands.ownership import OwnershipService
 from branchops.application.queries.read_models import ReadModels
 from branchops.config.settings import Settings
 from branchops.infrastructure.database.session import Database
@@ -22,6 +23,7 @@ class DashboardContext:
     db: Database
     registry: TemplateRegistry
     read: ReadModels
+    ownership: OwnershipService | None = None
 
     def query(self, fn: Callable[[Session], T]) -> T:
         with self.db.session() as session:

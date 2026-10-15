@@ -69,6 +69,11 @@ sources:
       watch_directory: /data/imports
       timezone: Europe/Istanbul
 
+# Screen ownership registry (teams/applications/screens/rules are data, managed in the dashboard /yonetim).
+ownership:
+  branch_ops_team_key: branch-ops   # CC on every routed notification, fallback owner
+  platform_team_key: platform       # receives ownership_unresolved together with branch-ops
+
 # Incident reporting through MCP (report_incident / add_incident_update); adds an `mcp_report` source "app".
 reporting:
   enabled: true

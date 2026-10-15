@@ -293,3 +293,107 @@ class TicketingOutbox(OutboxMixin, Base):
 
     __tablename__ = "ticketing_outbox"
     __table_args__ = (Index("ix_ticketing_outbox_claim", "status", "available_at"),)
+
+
+class OwnershipTeam(Base):
+    __tablename__ = "teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="app_owner")
+    email: Mapped[str | None] = mapped_column(String(320))
+    zoom_channel_id: Mapped[str | None] = mapped_column(String(200))
+    zoom_webhook_secret_ref: Mapped[str | None] = mapped_column(String(120))
+    jira_project_key: Mapped[str | None] = mapped_column(String(30))
+    oncall_contact: Mapped[str | None] = mapped_column(String(300))
+    working_hours: Mapped[str | None] = mapped_column(String(120))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OwnedApplication(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    owner_team_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("teams.id", ondelete="RESTRICT"), nullable=False
+    )
+    default_screen_owner_team_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("teams.id", ondelete="RESTRICT")
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OwnedScreen(Base):
+    __tablename__ = "screens"
+    __table_args__ = (UniqueConstraint("application_id", "key", name="uq_screens_application_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    application_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    route_pattern: Mapped[str | None] = mapped_column(String(300))
+    owner_team_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("teams.id", ondelete="RESTRICT"), nullable=False
+    )
+    tags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class RoutingRuleRow(Base):
+    __tablename__ = "routing_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    match: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    notify_to_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    cc_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    channels: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OwnershipChange(Base):
+    """Append-only history of every registry write (who, when, before/after)."""
+
+    __tablename__ = "ownership_changes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False, index=True
+    )
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    entity: Mapped[str] = mapped_column(String(20), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    correlation_id: Mapped[str | None] = mapped_column(String(64))

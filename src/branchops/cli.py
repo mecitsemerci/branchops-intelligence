@@ -228,6 +228,32 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ownership(args: argparse.Namespace) -> int:
+    """``branchops ownership check``: validate the screen ownership registry (exit 1 on errors)."""
+    from branchops.application.commands.ownership import OwnershipService
+    from branchops.container import Container
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        findings = OwnershipService(container.db, settings).check(preview_days=args.days)
+    finally:
+        container.close()
+    errors = [f for f in findings if f.level == "error"]
+    print(
+        json.dumps(
+            {
+                "errors": len(errors),
+                "warnings": len(findings) - len(errors),
+                "findings": [f.__dict__ for f in findings],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 1 if errors else 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     from branchops.dashboard.app import run_dashboard
 
@@ -408,6 +434,10 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--source", default=None, help="only this source (default: all enabled pull sources)")
     poll.add_argument("--once", action="store_true", help="poll every source once and exit")
     poll.set_defaults(func=cmd_poll)
+    own = sub.add_parser("ownership", help="screen ownership registry utilities")
+    own.add_argument("ownership_command", choices=["check"])
+    own.add_argument("--days", type=int, default=90, help="window for 'rule matches nothing' warnings")
+    own.set_defaults(func=cmd_ownership)
     sub.add_parser(
         "migrate", help="apply DB migrations, checkpoint tables and publish templates"
     ).set_defaults(func=cmd_migrate)

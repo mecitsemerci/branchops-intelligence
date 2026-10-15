@@ -172,6 +172,15 @@ class TicketingSettings(BaseModel):
         return os.environ.get(self.token_env) or None
 
 
+class OwnershipSettings(BaseModel):
+    """Screen ownership registry and routing (data is managed in the dashboard under /yonetim)."""
+
+    # CC on every routed notification and fallback owner when nothing else matches.
+    branch_ops_team_key: str = "branch-ops"
+    # Receives ``ownership_unresolved`` notifications together with branch operations.
+    platform_team_key: str | None = "platform"
+
+
 class OutboxSettings(BaseModel):
     """Drain loops of the transactional outboxes (ticketing, notifications) in the worker process."""
 
@@ -367,6 +376,7 @@ class Settings(BaseModel):
     reporting: ReportingSettings = ReportingSettings()
     ticketing: TicketingSettings = TicketingSettings()
     outbox: OutboxSettings = OutboxSettings()
+    ownership: OwnershipSettings = OwnershipSettings()
 
     @model_validator(mode="before")
     @classmethod

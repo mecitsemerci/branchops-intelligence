@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 _TABLES = (
     "agent_steps, analyses, issue_relationships, issue_comments, issues, webhook_inbox, "
-    "template_versions, audit_log, source_checkpoints, ticketing_outbox"
+    "template_versions, audit_log, source_checkpoints, ticketing_outbox, "
+    "ownership_changes, routing_rules, screens, applications, teams"
 )
 
 
