@@ -42,6 +42,7 @@ def create_app(settings: Settings, container: Container | None = None) -> FastAP
         db=container.db,
         registry=container.registry,
         read_models=ReadModels(settings.scoring.low_quality_threshold),
+        sources=container.sources,
     )
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(CorrelationIdMiddleware)

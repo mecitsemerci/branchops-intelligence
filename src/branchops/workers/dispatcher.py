@@ -10,7 +10,7 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Protocol
 
 from branchops.config.settings import WorkerSettings
 from branchops.infrastructure.database.session import Database
@@ -88,7 +88,16 @@ class Dispatcher:
         signal.signal(signal.SIGINT, handler)
 
 
-def start_health_server(dispatcher: Dispatcher, port: int, stale_after_seconds: float) -> ThreadingHTTPServer:
+class HealthState(Protocol):
+    """Loop heartbeat and DB status of a long-running process (worker dispatcher, source poller)."""
+
+    last_loop_at: float
+    db_ok: bool
+
+
+def start_health_server(
+    dispatcher: HealthState, port: int, stale_after_seconds: float
+) -> ThreadingHTTPServer:
     """Liveness = loop is iterating; readiness = last DB interaction succeeded; /metrics for Prometheus."""
 
     class Handler(BaseHTTPRequestHandler):

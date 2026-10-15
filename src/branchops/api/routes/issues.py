@@ -1,4 +1,8 @@
-"""Read API for issues, analyses, analytics and executions; analyst/admin actions."""
+"""Read API for incidents ("issues"), analyses, analytics and executions; analyst/admin actions.
+
+Incidents are addressed by ``incident_key`` (``jira:OPS-123``, ``snow:INC0012345``,
+``csv:2026-10-import/row-17``); a bare legacy Jira key (``OPS-123``) is still accepted.
+"""
 
 from __future__ import annotations
 
@@ -12,8 +16,9 @@ from branchops.agents.reporting import ReportingAgent
 from branchops.api.dependencies import AppServices, db_session, require, services
 from branchops.application.commands.ingest_webhook import RequestReanalysis
 from branchops.application.queries.read_models import IssueFilter
+from branchops.domain.entities.incident import incident_key as make_incident_key
+from branchops.domain.entities.incident import is_valid_incident_key, parse_incident_key
 from branchops.domain.enums import Role
-from branchops.infrastructure.jira.adapter import ISSUE_KEY_RE
 from branchops.infrastructure.persistence.audit import audit
 from branchops.infrastructure.persistence.inbox_repository import InboxRepository
 from branchops.infrastructure.security.auth import Principal
@@ -21,15 +26,22 @@ from branchops.infrastructure.security.auth import Principal
 router = APIRouter(prefix="/api", tags=["issues"])
 
 
+def _incident_key(value: str) -> str:
+    if not is_valid_incident_key(value):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid incident key")
+    return make_incident_key(*parse_incident_key(value))
+
+
 @router.get("/issues")
 def list_issues(
     search: str | None = Query(default=None, max_length=200),
+    source: str | None = Query(default=None, max_length=40),
     category: str | None = None,
     branch_code: str | None = None,
     application: str | None = None,
     analysis_status: str | None = None,
     low_quality_only: bool = False,
-    sort: Literal["updated", "quality", "completeness", "issue_key"] = "updated",
+    sort: Literal["updated", "quality", "completeness", "incident_key", "issue_key"] = "updated",
     descending: bool = True,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
@@ -41,6 +53,7 @@ def list_issues(
         session,
         IssueFilter(
             search=search,
+            source=source,
             category=category,
             branch_code=branch_code,
             application=application,
@@ -55,44 +68,41 @@ def list_issues(
     return {"items": result.items, "total": result.total, "page": result.page, "page_size": result.page_size}
 
 
-@router.get("/issues/{issue_key}")
-def issue_detail(
-    issue_key: str,
-    svc: AppServices = Depends(services),
-    session: Session = Depends(db_session),
-    _: Principal = Depends(require(Role.VIEWER)),
-) -> dict[str, Any]:
-    if not ISSUE_KEY_RE.match(issue_key):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid issue key")
-    detail = svc.read_models.issue_detail(session, issue_key)
-    if detail is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
-    return detail
-
-
-@router.post("/issues/{issue_key}/reanalyze", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/issues/{incident_key:path}/reanalyze", status_code=status.HTTP_202_ACCEPTED)
 def reanalyze(
-    issue_key: str,
+    incident_key: str,
     request: Request,
     svc: AppServices = Depends(services),
     principal: Principal = Depends(require(Role.ANALYST)),
 ) -> dict[str, Any]:
-    if not ISSUE_KEY_RE.match(issue_key):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid issue key")
+    key = _incident_key(incident_key)
     with svc.db.session() as s:
-        if svc.read_models.issue_detail(s, issue_key) is None:
+        if svc.read_models.issue_detail(s, key) is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
         audit(
             s,
             actor=principal.username,
             action="reanalysis_requested",
             resource_type="issue",
-            resource_id=issue_key,
+            resource_id=key,
         )
     event_id = RequestReanalysis(svc.db, svc.settings).execute(
-        issue_key, requested_by=principal.username, correlation_id=request.state.correlation_id
+        key, requested_by=principal.username, correlation_id=request.state.correlation_id
     )
     return {"status": "queued", "event_id": event_id}
+
+
+@router.get("/issues/{incident_key:path}")
+def issue_detail(
+    incident_key: str,
+    svc: AppServices = Depends(services),
+    session: Session = Depends(db_session),
+    _: Principal = Depends(require(Role.VIEWER)),
+) -> dict[str, Any]:
+    detail = svc.read_models.issue_detail(session, _incident_key(incident_key))
+    if detail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
+    return detail
 
 
 @router.get("/analytics/overview")

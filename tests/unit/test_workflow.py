@@ -62,7 +62,7 @@ def initial(
 ) -> AnalysisState:
     return {
         "analysis_id": str(uuid.uuid4()),
-        "issue_key": snap.issue_key,
+        "incident_key": snap.incident_key,
         "correlation_id": "corr-1",
         "inbox_event_id": None,
         "input_hash": input_hash,
@@ -147,7 +147,7 @@ def test_similar_issues_and_recurrence(registry: TemplateRegistry) -> None:
     wf, _ = build(registry, history=history)
     snap = snapshot_from("duplicate_issue")
     result = wf.run(initial(snap), thread_id="t7")
-    rel = {s.issue_key: s.relationship for s in result.similar_issues}
+    rel = {s.incident_key: s.relationship for s in result.similar_issues}
     assert rel["BOPS-101"] is RelationshipType.DUPLICATE_CANDIDATE
     assert rel["BOPS-105"] is RelationshipType.RELATED
     assert result.recurring and result.recurring_count == 3

@@ -16,7 +16,7 @@ from branchops.infrastructure.persistence.inbox_repository import InboxRepositor
 
 EXEC_COLUMNS = [
     {"name": "started_at", "label": "Başlangıç", "field": "started_at", "align": "left"},
-    {"name": "issue_key", "label": "Kayıt", "field": "issue_key", "align": "left"},
+    {"name": "incident_key", "label": "Kayıt", "field": "incident_key", "align": "left"},
     {"name": "status", "label": "Durum", "field": "status"},
     {"name": "duration_ms", "label": "Süre (ms)", "field": "duration_ms"},
     {"name": "model_id", "label": "Model", "field": "model_id"},
@@ -66,7 +66,7 @@ def register(ctx: DashboardContext) -> None:
                 )
                 with ui.dialog() as dialog, ui.card().classes("min-w-[1000px]"):
                     ui.label(
-                        f"{row['issue_key']} · {row['analysis_id']} · korelasyon {row['correlation_id']}"
+                        f"{row['incident_key']} · {row['analysis_id']} · korelasyon {row['correlation_id']}"
                     ).classes("font-semibold")
                     ui.table(columns=STEP_COLUMNS, rows=steps, row_key="step").classes("w-full")
                     for err in row["errors"]:
@@ -125,7 +125,9 @@ def register(ctx: DashboardContext) -> None:
                         ui.label(" · ".join(f"{k}: {v}" for k, v in sorted(summary["by_status"].items())))
                         for d in summary["dead_letters"]:
                             with ui.card().classes("w-full"), ui.row().classes("items-center gap-3"):
-                                ui.label(f"{d['issue_key']} · {d['event']} · {d['attempts']} deneme")
+                                ui.label(
+                                    f"{d['incident_key'] or '—'} · {d['event']} · {d['attempts']} deneme"
+                                )
                                 ui.label(d["last_error"]).classes("text-xs font-mono text-negative max-w-2xl")
 
                                 async def replay(event_id: str = d["event_id"]) -> None:

@@ -1,19 +1,23 @@
 # Jira integration
 
-Webhooks are the **only** ingestion mechanism. BranchOps never calls the Jira REST API and never modifies
-Jira issues.
+Jira is one of several incident sources (see [sources](sources.md)): the `jira_webhook` adapter. Webhooks
+are the only Jira ingestion mechanism; BranchOps never calls the Jira REST API and never modifies Jira
+issues. Jira records are identified as `jira:<issue key>` (e.g. `jira:BOPS-101`); API and dashboard URLs
+still accept the bare issue key.
 
 ## Configuring the webhook in Jira
 
 | Setting | Value |
 |---|---|
-| URL | `https://branchops-api.apps.bank.internal/api/webhooks/jira` |
+| URL | `https://branchops-api.apps.bank.internal/api/ingest/jira` (the legacy `…/api/webhooks/jira` stays valid) |
 | Events | Issue: created, updated, deleted · Comment: created, updated, deleted |
 | JQL filter (recommended) | `project in (BOPS, …)` — only branch-operations projects |
 | Secret (Jira DC 10+ / Cloud) | a value from `JIRA_WEBHOOK_SECRETS` → Jira sends `X-Hub-Signature: sha256=<hmac>` |
-| Older Jira without secrets | send header `X-BranchOps-Webhook-Token` via a reverse proxy, or (last resort) enable `webhook.allow_query_token` and register `…/jira?token=<value from JIRA_WEBHOOK_QUERY_TOKENS>` |
+| Older Jira without secrets | send header `X-BranchOps-Webhook-Token` via a reverse proxy, or (last resort) enable `auth.allow_query_token` on the source and register `…/jira?token=<value from JIRA_WEBHOOK_QUERY_TOKENS>` |
 
-Map the bank's custom fields in configuration (`jira.field_mapping`), for example
+Configure the source under `sources:` (`id: jira`, `type: jira_webhook`); configurations that still use the
+old `jira:` / `webhook:` sections are translated into exactly that source. Map the bank's custom fields
+in `field_mapping`, for example
 `branch_code: customfield_10101`, `application: customfield_10102`. Mapped fields take precedence over
 values extracted by the model and carry `JIRA_FIELD` provenance.
 
@@ -22,22 +26,23 @@ values extracted by the model and carry `JIRA_FIELD` provenance.
 ```mermaid
 sequenceDiagram
     participant J as Jira
-    participant A as POST /api/webhooks/jira
+    participant A as POST /api/ingest/jira
     participant DB as webhook_inbox
     J->>A: JSON payload
     A->>A: 415 unless JSON · 413 if > webhook.max_body_bytes (streamed)
+    A->>A: 404 unless the source is configured and enabled
     A->>A: 401 unless HMAC/token valid (constant-time, rotated secrets, optional CIDR)
     A->>A: 400 unless valid UTF-8 JSON object with a well-formed issue key
     A->>A: normalise metadata (event type, issue key, project, timestamp)
     A->>DB: INSERT … ON CONFLICT (idempotency_key) DO NOTHING
-    A-->>J: 202 accepted · 200 duplicate · 200 ignored (unsupported event / project)
+    A-->>J: 202 accepted · 200 duplicate · 200 ignored (unsupported event / project not in allowed_groups)
 ```
 
 No model call or issue processing happens in the request. `idempotency_key` is
-`delivery:<X-Atlassian-Webhook-Identifier>` when Jira sends it, otherwise `sha256:<canonical payload>`,
-so Jira retries of the same delivery are stored once.
+`jira:delivery:<X-Atlassian-Webhook-Identifier>` when Jira sends it, otherwise
+`jira:sha256:<canonical payload>`, so Jira retries of the same delivery are stored once.
 
-## Payload variants handled (`infrastructure/jira/adapter.py`)
+## Payload variants handled (`infrastructure/sources/jira/adapter.py`)
 
 | Variation | Handling |
 |---|---|

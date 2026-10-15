@@ -16,10 +16,10 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
     running_rows = s.execute(
         text(
             """
-            SELECT a.id, a.issue_key, a.current_step, a.worker_id, a.started_at, a.heartbeat_at, a.model_id,
-                   i.summary, extract(epoch FROM now() - a.started_at) AS elapsed,
+            SELECT a.id, a.incident_key, i.source, a.current_step, a.worker_id, a.started_at, a.heartbeat_at,
+                   a.model_id, i.summary, extract(epoch FROM now() - a.started_at) AS elapsed,
                    extract(epoch FROM now() - coalesce(a.heartbeat_at, a.started_at)) AS since_beat
-            FROM analyses a JOIN issues i ON i.issue_key = a.issue_key
+            FROM analyses a JOIN issues i ON i.incident_key = a.incident_key
             WHERE a.status = 'RUNNING'
             ORDER BY a.started_at
             """
@@ -29,10 +29,10 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
     recent_rows = s.execute(
         text(
             """
-            SELECT a.id, a.issue_key, a.status, a.worker_id, a.started_at, a.completed_at, a.duration_ms,
+            SELECT a.id, a.incident_key, i.source, a.status, a.worker_id, a.started_at, a.completed_at, a.duration_ms,
                    a.completeness_score, a.quality_score, a.category, a.model_id, i.summary,
                    a.prompt_tokens + a.completion_tokens AS tokens
-            FROM analyses a JOIN issues i ON i.issue_key = a.issue_key
+            FROM analyses a JOIN issues i ON i.incident_key = a.incident_key
             WHERE a.status <> 'RUNNING'
             ORDER BY coalesce(a.completed_at, a.started_at) DESC
             LIMIT :n
@@ -80,7 +80,7 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
     last_event = s.execute(
         text(
             """
-            SELECT raw_event_name, issue_key, status, received_at, extract(epoch FROM now() - received_at) AS age
+            SELECT raw_event_name, source, issue_key, status, received_at, extract(epoch FROM now() - received_at) AS age
             FROM webhook_inbox ORDER BY received_at DESC LIMIT 10
             """
         )
@@ -104,7 +104,8 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
         running.append(
             {
                 "analysis_id": str(r.id),
-                "issue_key": r.issue_key,
+                "incident_key": r.incident_key,
+                "source": r.source,
                 "summary": r.summary,
                 "current_step": r.current_step,
                 "worker_id": r.worker_id,
@@ -125,7 +126,11 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
                 "label": label,
                 "is_agent": is_agent,
                 "busy": [
-                    {"issue_key": b["issue_key"], "worker_id": b["worker_id"], "elapsed_s": b["elapsed_s"]}
+                    {
+                        "incident_key": b["incident_key"],
+                        "worker_id": b["worker_id"],
+                        "elapsed_s": b["elapsed_s"],
+                    }
                     for b in busy
                 ],
                 "runs_24h": int(stat.runs) if stat else 0,
@@ -141,7 +146,8 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
         "recent": [
             {
                 "analysis_id": str(r.id),
-                "issue_key": r.issue_key,
+                "incident_key": r.incident_key,
+                "source": r.source,
                 "summary": r.summary,
                 "status": r.status,
                 "worker_id": r.worker_id,
@@ -162,7 +168,8 @@ def live_activity(s: Session, stale_minutes: int = 5, recent: int = 12) -> dict[
         "events": [
             {
                 "event": e.raw_event_name,
-                "issue_key": e.issue_key,
+                "source": e.source,
+                "incident_key": f"{e.source}:{e.issue_key}" if e.issue_key else None,
                 "status": e.status,
                 "received_at": e.received_at.isoformat(),
                 "age_s": int(e.age or 0),

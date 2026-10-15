@@ -37,7 +37,7 @@ class DatabaseProgressReporter:
         def write(s: Session) -> None:
             values = {
                 "id": uuid.UUID(info.analysis_id),
-                "issue_key": info.issue_key,
+                "incident_key": info.incident_key,
                 "inbox_event_id": uuid.UUID(info.inbox_event_id) if info.inbox_event_id else None,
                 "correlation_id": info.correlation_id,
                 "status": AnalysisStatus.RUNNING.value,

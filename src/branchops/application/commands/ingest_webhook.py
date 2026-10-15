@@ -1,19 +1,37 @@
-"""Command: persist an authenticated Jira webhook in the durable inbox (no LLM work here)."""
+"""Commands: persist a source event in the durable inbox (no LLM work here); request a re-analysis."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from branchops.application.interfaces.source_adapter import (
+    PushSourceAdapter,
+    SourcePayloadError,
+    SourceRegistry,
+    UnknownSourceError,
+    event_envelope,
+    payload_digest,
+)
 from branchops.config.settings import Settings
-from branchops.domain.enums import JiraEventType
+from branchops.domain.entities.incident import IncidentEvent, parse_incident_key
+from branchops.domain.enums import IncidentEventType
 from branchops.infrastructure.database.session import Database
-from branchops.infrastructure.jira.adapter import JiraPayloadError, JiraWebhookAdapter
 from branchops.infrastructure.persistence.inbox_repository import InboxRepository, NewInboxEvent
+
+__all__ = [
+    "IngestIncidentEvent",
+    "IngestOutcome",
+    "IngestResult",
+    "InvalidWebhookPayloadError",
+    "RequestReanalysis",
+    "parse_payload",
+    "payload_digest",
+]
 
 
 class IngestOutcome(StrEnum):
@@ -35,11 +53,6 @@ class InvalidWebhookPayloadError(ValueError):
     pass
 
 
-def payload_digest(payload: dict[str, Any]) -> str:
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def parse_payload(body: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(body.decode("utf-8"))
@@ -50,41 +63,70 @@ def parse_payload(body: bytes) -> dict[str, Any]:
     return payload
 
 
-class IngestJiraWebhook:
-    def __init__(self, db: Database, settings: Settings, adapter: JiraWebhookAdapter) -> None:
+class IngestIncidentEvent:
+    """Store one source event in the inbox, idempotently per source.
+
+    Push sources pass the raw ``payload`` (+ ``headers``); the adapter normalises it for validation and
+    routing and the *raw* payload is stored (the worker normalises again with masking). Pull sources pass an
+    already normalised ``event``, which is stored as an event envelope.
+    """
+
+    def __init__(self, db: Database, settings: Settings, registry: SourceRegistry) -> None:
         self._db = db
         self._settings = settings
-        self._adapter = adapter
+        self._registry = registry
         self._inbox = InboxRepository()
 
     def execute(
-        self, payload: dict[str, Any], *, correlation_id: str, delivery_id: str | None = None
+        self,
+        source_id: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        correlation_id: str,
+        headers: Mapping[str, str] | None = None,
+        event: IncidentEvent | None = None,
     ) -> IngestResult:
-        try:
-            event = self._adapter.normalize(payload)
-        except JiraPayloadError as exc:
-            raise InvalidWebhookPayloadError(str(exc)) from exc
-        if event.event_type is JiraEventType.UNSUPPORTED:
+        adapter = self._registry.get(source_id)  # UnknownSourceError for unknown/disabled sources
+        if (payload is None) == (event is None):
+            raise ValueError("pass exactly one of payload or event")
+        if payload is not None:
+            if not isinstance(adapter, PushSourceAdapter):
+                raise UnknownSourceError(f"{source_id} is not a push source")
+            try:
+                event = adapter.normalize(payload)
+            except SourcePayloadError as exc:
+                raise InvalidWebhookPayloadError(str(exc)) from exc
+            stored = payload
+            key = adapter.idempotency_key(payload, headers or {})
+        else:
+            assert event is not None  # noqa: S101 - narrowed by the exactly-one check above
+            if event.source != source_id:
+                raise InvalidWebhookPayloadError(f"event source {event.source!r} is not {source_id!r}")
+            stored = event_envelope(event)
+            # The key includes the event timestamp: a re-import must be able to restore an earlier value
+            # (A -> B -> A); unchanged re-imports are cheap no-ops in the worker (same analysis input hash).
+            key = f"event:{payload_digest(stored)}"
+
+        if event.event_type is IncidentEventType.UNSUPPORTED:
             return IngestResult(
                 IngestOutcome.IGNORED, correlation_id, reason=f"unsupported event {event.raw_event_name}"
             )
-        allowed = self._settings.jira.allowed_projects
-        if allowed and event.project_key not in allowed:
-            return IngestResult(IngestOutcome.IGNORED, correlation_id, reason="project not enabled")
+        source = self._settings.source(source_id)
+        allowed = source.allowed_groups if source else []
+        if allowed and event.group_key not in allowed:
+            return IngestResult(IngestOutcome.IGNORED, correlation_id, reason="group not enabled")
 
-        digest = payload_digest(payload)
-        # Jira Cloud sends a stable delivery id on retries; otherwise identical bodies are duplicates.
-        idempotency_key = f"delivery:{delivery_id}" if delivery_id else f"sha256:{digest}"
         new = NewInboxEvent(
-            idempotency_key=idempotency_key[:200],
+            idempotency_key=f"{source_id}:{key}"[:200],
             correlation_id=correlation_id,
             event_type=event.event_type.value,
             raw_event_name=event.raw_event_name[:120],
-            issue_key=event.issue_key,
-            project_key=event.project_key,
+            source=source_id,
+            issue_key=event.external_key,
+            group_key=event.group_key,
             event_timestamp=event.event_timestamp,
-            payload=payload,
-            payload_sha256=digest,
+            payload=stored,
+            payload_sha256=payload_digest(stored),
             max_attempts=self._settings.worker.max_attempts,
         )
         with self._db.session() as session:
@@ -98,26 +140,28 @@ class IngestJiraWebhook:
 
 
 class RequestReanalysis:
-    """Enqueue a manual re-analysis of an issue (analyst action, audited by the caller)."""
+    """Enqueue a manual re-analysis of an incident (analyst action, audited by the caller)."""
 
     def __init__(self, db: Database, settings: Settings) -> None:
         self._db = db
         self._settings = settings
         self._inbox = InboxRepository()
 
-    def execute(self, issue_key: str, *, requested_by: str, correlation_id: str) -> str | None:
+    def execute(self, incident_key: str, *, requested_by: str, correlation_id: str) -> str | None:
+        source, external_key = parse_incident_key(incident_key)
         payload = {
             "webhookEvent": "branchops:manual_reanalysis",
-            "issue": {"key": issue_key},
+            "incident_key": f"{source}:{external_key}",
             "user": {"name": requested_by},
         }
         new = NewInboxEvent(
             idempotency_key=f"manual:{uuid.uuid4()}",
             correlation_id=correlation_id,
-            event_type=JiraEventType.MANUAL_REANALYSIS.value,
+            event_type=IncidentEventType.MANUAL_REANALYSIS.value,
             raw_event_name="branchops:manual_reanalysis",
-            issue_key=issue_key,
-            project_key=issue_key.split("-", maxsplit=1)[0],
+            source=source,
+            issue_key=external_key,
+            group_key=None,
             event_timestamp=None,
             payload=payload,
             payload_sha256=payload_digest(payload),

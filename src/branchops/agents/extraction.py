@@ -1,7 +1,7 @@
 """ExtractionAgent: structured operational fields with verified evidence.
 
 Precedence when building the canonical issue (highest first):
-1. Jira custom fields mapped in configuration (``JIRA_FIELD`` provenance).
+1. Source fields mapped in configuration (``JIRA_FIELD`` provenance, kept for stored analyses).
 2. Values extracted by the model **and** supported by verifiable evidence (``LLM_EXTRACTION``).
 3. Classification output for category/subcategory/application/business process (``LLM_CLASSIFICATION``).
 
@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field, ValidationInfo, model_validator
 from branchops.agents.base import StructuredCaller, StructuredResult
 from branchops.agents.prompts import GUARDRAILS, EvidenceQuote
 from branchops.domain.entities.analysis import Classification
+from branchops.domain.entities.incident import IncidentSnapshot
 from branchops.domain.entities.issue import FIELD_LABELS_TR, LLM_EXTRACTABLE_FIELDS, CanonicalIssue
-from branchops.domain.entities.jira import JiraIssueSnapshot
 from branchops.domain.enums import FieldState, ProvenanceSource
 from branchops.domain.services.evidence import value_occurs_in_sources, verify_evidence
 from branchops.domain.value_objects import EvidenceRef, ExtractedField, Provenance
@@ -123,7 +123,7 @@ _STATUS_TO_STATE: dict[str, FieldState] = {
 
 
 def build_canonical_issue(
-    snapshot: JiraIssueSnapshot,
+    snapshot: IncidentSnapshot,
     sources: dict[str, str],
     classification: Classification | None,
     extraction: ExtractionOutput | None,
@@ -134,7 +134,7 @@ def build_canonical_issue(
     now = datetime.now(UTC)
     fields: dict[str, ExtractedField] = {}
 
-    def jira(path: str, value: str | None) -> ExtractedField:
+    def source_field(path: str, value: str | None) -> ExtractedField:
         if value is None or not value.strip():
             return ExtractedField.missing()
         return ExtractedField(
@@ -144,8 +144,8 @@ def build_canonical_issue(
             provenance=Provenance(source=ProvenanceSource.JIRA_FIELD, source_path=path, recorded_at=now),
         )
 
-    fields["summary"] = jira("summary", snapshot.summary)
-    fields["description"] = jira("description", snapshot.description)
+    fields["summary"] = source_field("summary", snapshot.summary)
+    fields["description"] = source_field("description", snapshot.description)
 
     llm_values: dict[str, ExtractedValueOutput] = {}
     if extraction is not None:
@@ -155,7 +155,7 @@ def build_canonical_issue(
     for name in LLM_EXTRACTABLE_FIELDS:
         mapped = snapshot.mapped_fields.get(name)
         if mapped:
-            fields[name] = jira(f"field:{name}", mapped)
+            fields[name] = source_field(f"field:{name}", mapped)
             continue
         model_item = llm_values.get(name)
         if model_item is None:
@@ -201,8 +201,9 @@ def build_canonical_issue(
         fields["subcategory"] = ExtractedField.unknown("classification unavailable")
 
     return CanonicalIssue(
-        issue_key=snapshot.issue_key,
-        project=snapshot.project_key,
+        incident_key=snapshot.incident_key,
+        source=snapshot.source,
+        group_key=snapshot.group_key,
         status=snapshot.status,
         source_created_at=snapshot.created_at,
         source_updated_at=snapshot.updated_at,
