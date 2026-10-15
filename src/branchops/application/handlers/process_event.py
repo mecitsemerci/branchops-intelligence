@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -90,6 +91,7 @@ class EventProcessor:
         workflow: IssueAnalysisWorkflow,
         sources: SourceRegistry | None = None,
         masker: SensitiveDataMasker | None = None,
+        on_analysis: Callable[[str, str | None], object] | None = None,
     ) -> None:
         self._db = db
         self._settings = settings
@@ -102,6 +104,8 @@ class EventProcessor:
         self._sources = sources
         self._masker = masker or SensitiveDataMasker(settings.security.masking_extra_patterns)
         self._issues = IssueRepository()
+        # Called after every analysis (routing / notifications); failures never fail the inbox event.
+        self._on_analysis = on_analysis
 
     def process(self, item: InboxItem) -> ProcessOutcome:
         incident_key = item.incident_key
@@ -203,6 +207,11 @@ class EventProcessor:
             "degraded": [],
         }
         result = self._workflow.run(initial, thread_id=f"inbox:{item.id}")
+        if self._on_analysis is not None:
+            try:
+                self._on_analysis(incident_key, result.analysis_id)
+            except Exception:
+                logger.exception("post-analysis hook failed", extra={"incident_key": incident_key})
         return ProcessOutcome(
             InboxStatus.COMPLETED,
             f"analysed: {result.status.value}",

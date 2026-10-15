@@ -92,3 +92,41 @@ recommendation text. End with a short message the analyst can send to the branch
 these details.
 
 {_GROUND_RULES}"""
+
+    @mcp.prompt(
+        name="report-from-app",
+        description="Guided incident report for an agent embedded in a bank application.",
+    )
+    def report_from_app(
+        app_id: Annotated[str, Field(min_length=1, max_length=64, description="Host application key.")],
+        screen_id: Annotated[str | None, Field(max_length=64, description="Current screen key.")] = None,
+    ) -> str:
+        screen = f', screen_id="{screen_id}"' if screen_id else ""
+        return f"""You are embedded in the bank application "{app_id}". Help the signed-in user report the
+problem they are seeing to BranchOps, with as little typing as possible.
+
+Steps:
+1. Gather `app_context` from the host application yourself — do not ask the user for it: app_id="{app_id}"
+   {screen}, screen_title, route (internal path), build_version, environment, error_code and error_message
+   shown on screen, correlation_id / trace_id, the last (max 20) HTTP requests (method, path, status,
+   duration_ms — never bodies, headers or query strings), a log excerpt (max 4000 characters), user_context
+   (branch_code, role) and device (os, browser, resolution), occurred_at.
+2. Call resolve_owner(app_id="{app_id}"{screen}, route=<route>) and tell the user which team will receive the
+   report (branch operations is always in copy).
+3. Ask the user, in Turkish, one short question: what were they trying to do and what happened? Draft a
+   title and description from their answer.
+4. Call check_incident_draft(draft) with the draft and app_context. For every item in missing_required, ask
+   the user only that question (use the `recommendation` text); fix values listed in `invalid`. Do not ask
+   for optional fields unless the user volunteers them. Keep the returned `draft_token`.
+5. Take a screenshot of the current screen. Before uploading, find areas showing customer data (names,
+   TCKN, IBAN, card or account numbers, phone numbers) and pass them as blur_regions [x, y, w, h]. Call
+   upload_attachment(draft_token=<token>, filename="ekran.png", content_type="image/png", kind="screenshot",
+   data_base64=<png>, blur_regions=[...]). Attach the log excerpt as a text/plain file only if it helps.
+6. Show the user the final title, description and attachments and ask for confirmation. Only after an
+   explicit yes call report_incident(draft, draft_token=<token>, idempotency_key=<a new random id>).
+7. Show the returned incident_key, the owning team from step 2, and the notification / ticket status.
+   Tell the user they can add information later (add_incident_update with the incident_key).
+
+Rules: never invent technical details; never include passwords, tokens or full customer identifiers in the
+text; if a tool fails, say so and do not retry report_incident with a different idempotency_key.
+{_GROUND_RULES}"""

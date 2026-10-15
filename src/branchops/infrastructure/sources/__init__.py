@@ -19,6 +19,10 @@ def build_adapter(src: SourceSettings) -> SourceAdapter:
         from branchops.infrastructure.sources.csv_import.adapter import CsvImportAdapter
 
         return CsvImportAdapter(src)
+    if src.type == "mcp_report":
+        from branchops.infrastructure.sources.mcp_report.adapter import McpReportAdapter
+
+        return McpReportAdapter(src.id)
     raise ValueError(f"unsupported source type {src.type!r}")  # pragma: no cover - Literal-validated
 
 

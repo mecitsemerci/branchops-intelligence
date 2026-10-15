@@ -10,6 +10,7 @@ import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from branchops.config.settings import Settings, load_settings
 from branchops.infrastructure.observability.logging import configure_logging
@@ -53,12 +54,16 @@ def cmd_worker(args: argparse.Namespace) -> int:
     setup_telemetry(settings, role="worker")
     container = Container.build(settings)
     workflow = container.build_workflow()
+    from branchops.application.commands.routing import IncidentRouter
+
+    check_notification_readiness(container)
     processor = EventProcessor(
         db=container.db,
         settings=settings,
         registry=container.registry,
         workflow=workflow,
         sources=container.sources,
+        on_analysis=IncidentRouter(container.db, settings).on_analysis_complete,
     )
     owner = worker_identity()
     runner = InboxItemRunner(container.db, processor, settings.worker, owner)
@@ -78,10 +83,98 @@ def cmd_worker(args: argparse.Namespace) -> int:
     register_gauge("branchops_inbox_oldest_pending_seconds", "Age of the oldest pending event", oldest)
     start_health_server(dispatcher, settings.worker.health_port, stale_after_seconds=120)
     dispatcher.install_signal_handlers()
+    drainers = start_outbox_drainers(container, owner)
     try:
         dispatcher.run_forever()
     finally:
+        for drainer in drainers:
+            drainer.stop()
         container.close()
+    return 0
+
+
+def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
+    """Outboxes are drained by every worker replica (SKIP LOCKED); attachment retention runs hourly."""
+    from branchops.application.commands.attachments import AttachmentService
+    from branchops.infrastructure.attachments import build_attachment_store
+    from branchops.infrastructure.ticketing import build_ticketing_sink
+    from branchops.infrastructure.ticketing.handler import TICKETING_OUTBOX, TicketingHandler
+    from branchops.workers.housekeeping import PeriodicTask
+    from branchops.workers.outbox import OutboxDrainer
+
+    settings = container.settings
+    db = container.db
+    attachments = AttachmentService(settings, build_attachment_store(settings))
+
+    def load_attachment(attachment_id: str) -> Any:
+        with db.session() as s:
+            return attachments.load(s, attachment_id)
+
+    def purge() -> dict[str, int]:
+        with db.session() as s:
+            return attachments.purge(s)
+
+    tasks: list[Any] = [PeriodicTask("attachment-retention", purge, 3600.0)]
+    if settings.notifications.enabled:
+        from branchops.application.commands.notifications import NOTIFICATION_OUTBOX
+        from branchops.infrastructure.notifications import build_channels
+        from branchops.infrastructure.notifications.handler import NotificationHandler
+
+        tasks.append(
+            OutboxDrainer(
+                "notifications",
+                db,
+                NOTIFICATION_OUTBOX,
+                NotificationHandler(db, build_channels(settings)),
+                settings.outbox,
+                owner,
+            )
+        )
+    sink = build_ticketing_sink(settings)
+    if sink is not None:
+        tasks.append(
+            OutboxDrainer(
+                "ticketing",
+                db,
+                TICKETING_OUTBOX,
+                TicketingHandler(db, sink, load_attachment),
+                settings.outbox,
+                owner,
+            )
+        )
+    for task in tasks:
+        task.start()
+    return tasks
+
+
+def check_notification_readiness(container: Any) -> None:
+    """Production guard: the branch-ops team must exist, be active and be reachable on a working channel."""
+    from branchops.application.commands.ownership import OwnershipService, notification_findings
+
+    settings = container.settings
+    if settings.app.environment != "production" or not settings.notifications.enabled:
+        return
+    findings = notification_findings(OwnershipService(container.db, settings).registry(), settings)
+    errors = [f.message for f in findings if f.level == "error"]
+    if errors:
+        raise SystemExit("refusing to start: " + "; ".join(errors))
+
+
+def cmd_attachments(args: argparse.Namespace) -> int:
+    """``branchops attachments purge``: apply ``retention.attachments_days`` now."""
+    from branchops.application.commands.attachments import AttachmentService
+    from branchops.container import Container
+    from branchops.infrastructure.attachments import build_attachment_store
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        service = AttachmentService(settings, build_attachment_store(settings))
+        with container.db.session() as s:
+            result = service.purge(s)
+    finally:
+        container.close()
+    print(json.dumps(result))
     return 0
 
 
@@ -197,6 +290,32 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         return 1
     run(settings, stdio=args.stdio)
     return 0
+
+
+def cmd_ownership(args: argparse.Namespace) -> int:
+    """``branchops ownership check``: validate the screen ownership registry (exit 1 on errors)."""
+    from branchops.application.commands.ownership import OwnershipService
+    from branchops.container import Container
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        findings = OwnershipService(container.db, settings).check(preview_days=args.days)
+    finally:
+        container.close()
+    errors = [f for f in findings if f.level == "error"]
+    print(
+        json.dumps(
+            {
+                "errors": len(errors),
+                "warnings": len(findings) - len(errors),
+                "findings": [f.__dict__ for f in findings],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 1 if errors else 0
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
@@ -379,6 +498,13 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--source", default=None, help="only this source (default: all enabled pull sources)")
     poll.add_argument("--once", action="store_true", help="poll every source once and exit")
     poll.set_defaults(func=cmd_poll)
+    att = sub.add_parser("attachments", help="attachment utilities")
+    att.add_argument("attachments_command", choices=["purge"])
+    att.set_defaults(func=cmd_attachments)
+    own = sub.add_parser("ownership", help="screen ownership registry utilities")
+    own.add_argument("ownership_command", choices=["check"])
+    own.add_argument("--days", type=int, default=90, help="window for 'rule matches nothing' warnings")
+    own.set_defaults(func=cmd_ownership)
     sub.add_parser(
         "migrate", help="apply DB migrations, checkpoint tables and publish templates"
     ).set_defaults(func=cmd_migrate)

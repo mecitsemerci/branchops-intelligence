@@ -7,8 +7,9 @@ from typing import Any
 from fastapi import Request
 from nicegui import ui
 
+from branchops.application.queries.routing import routing_analytics
 from branchops.dashboard.components.charts import bar_chart
-from branchops.dashboard.components.layout import authorize, frame, load
+from branchops.dashboard.components.layout import authorize, frame, kpi, load
 from branchops.dashboard.context import DashboardContext
 from branchops.domain.entities.issue import FIELD_LABELS_TR
 
@@ -19,6 +20,36 @@ def _table(rows: list[dict[str, Any]], columns: list[tuple[str, str]], key: str)
         rows=rows,
         row_key=key,
     ).classes("w-full")
+
+
+def routing_kpis(data: dict[str, Any]) -> list[tuple[str, Any, str]]:
+    """(label, value, suffix) of the routing KPIs; rates as percentages."""
+    rate = data.get("unowned_screen_rate")
+    return [
+        ("Yönlendirilen kayıt", data.get("routed_incidents"), ""),
+        ("Medyan ilk bildirim süresi", data.get("median_minutes_to_first_notification"), " dk"),
+        ("Sahipsiz ekran oranı", round(rate * 100, 1) if rate is not None else None, " %"),
+    ]
+
+
+def routing_section(data: dict[str, Any]) -> None:
+    with ui.card().classes("w-full"):
+        ui.label("Yönlendirme").classes("text-lg font-semibold")
+        with ui.row().classes("gap-4 flex-wrap"):
+            for label, value, suffix in routing_kpis(data):
+                kpi(label, value, suffix=suffix)
+        with ui.row().classes("w-full gap-4 flex-nowrap"):
+            with ui.column().classes("w-1/2"):
+                ui.label("Sahip ekibe göre kayıt").classes("font-semibold")
+                _table(data["per_owner_team"], [("team_name", "Ekip"), ("incidents", "Kayıt")], "team_key")
+            with ui.column().classes("w-1/2"):
+                ui.label("En çok kayıt gelen ekranlar").classes("font-semibold")
+                rows = [{**r, "id": f"{r['application_key']}/{r['screen_key']}"} for r in data["top_screens"]]
+                _table(
+                    rows,
+                    [("application_key", "Uygulama"), ("screen_key", "Ekran"), ("incidents", "Kayıt")],
+                    "id",
+                )
 
 
 def register(ctx: DashboardContext) -> None:
@@ -36,8 +67,10 @@ def register(ctx: DashboardContext) -> None:
             async def render() -> None:
                 d = int(days.value)
                 data = await load(lambda: ctx.query(lambda s: ctx.read.quality_analytics(s, d)))
+                routing = await load(lambda: ctx.query(lambda s: routing_analytics(s, days=d)))
                 body.clear()
                 with body:
+                    routing_section(routing)
                     with ui.row().classes("w-full gap-4 flex-nowrap"):
                         with ui.card().classes("w-1/2"):
                             ui.label("Kategoriye göre ortalama kalite").classes("font-semibold")

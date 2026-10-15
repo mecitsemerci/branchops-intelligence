@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% block body %}
+<p>Kayda <b>yeni bilgi</b> eklendi.</p>
+<p style="font-size:16px;"><b>{{ summary }}</b></p>
+<blockquote style="border-left:3px solid #cbd5e1;padding-left:8px;white-space:pre-wrap;">{{ update_text }}</blockquote>
+<p style="color:#64748b;">Ekleyen: {{ update_author }}</p>
+{% endblock %}

@@ -20,6 +20,7 @@ from branchops.infrastructure.observability.logging import correlation_id_var
 from branchops.infrastructure.persistence.audit import audit
 from branchops.mcp.auth import Caller
 from branchops.mcp.output import TextRenderer
+from branchops.mcp.reporting import REPORTING_TOOLS
 from branchops.mcp.runtime import McpRuntime
 from branchops.templates.model import IssueTemplate
 
@@ -869,18 +870,21 @@ def register_tools(mcp: FastMCP, runtime: McpRuntime) -> None:
         return ReanalysisQueued(incident_key=canonical, status="queued", event_id=event_id)
 
 
-TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "search_incidents",
-        "get_incident",
-        "get_incident_analysis",
-        "find_similar_incidents",
-        "list_recurring_errors",
-        "get_quality_overview",
-        "get_quality_analytics",
-        "list_templates",
-        "get_template",
-        "get_inbox_health",
-        "request_reanalysis",
-    }
+TOOL_NAMES: frozenset[str] = (
+    frozenset(
+        {
+            "search_incidents",
+            "get_incident",
+            "get_incident_analysis",
+            "find_similar_incidents",
+            "list_recurring_errors",
+            "get_quality_overview",
+            "get_quality_analytics",
+            "list_templates",
+            "get_template",
+            "get_inbox_health",
+            "request_reanalysis",
+        }
+    )
+    | REPORTING_TOOLS
 )

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><title>{{ subject }}</title></head>
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: #1e293b;">
+{% if off_hours %}<p style="background:#fff7ed;border-left:4px solid #f97316;padding:8px;">
+<b>Mesai dışı bildirim.</b> {% if oncall_contact %}Nöbetçi: {{ oncall_contact }}{% endif %}</p>{% endif %}
+{% block body %}{% endblock %}
+<table style="border-collapse:collapse;margin-top:12px;">
+  <tr><td style="padding:2px 8px;color:#64748b;">Kayıt</td><td><b>{{ incident_key }}</b></td></tr>
+  {% if application %}<tr><td style="padding:2px 8px;color:#64748b;">Uygulama</td><td>{{ application }}</td></tr>{% endif %}
+  {% if screen %}<tr><td style="padding:2px 8px;color:#64748b;">Ekran</td><td>{{ screen }}</td></tr>{% endif %}
+  {% if branch_code %}<tr><td style="padding:2px 8px;color:#64748b;">Şube</td><td>{{ branch_code }}</td></tr>{% endif %}
+  {% if owner %}<tr><td style="padding:2px 8px;color:#64748b;">Sahip ekip</td><td>{{ owner }}</td></tr>{% endif %}
+  {% if cc_teams %}<tr><td style="padding:2px 8px;color:#64748b;">Bilgi (CC)</td><td>{{ cc_teams | join(", ") }}</td></tr>{% endif %}
+  {% if attachment_count %}<tr><td style="padding:2px 8px;color:#64748b;">Ekler</td><td>{{ attachment_count }} dosya (panelde)</td></tr>{% endif %}
+</table>
+{% if link %}<p><a href="{{ link }}">Kaydı BranchOps panelinde aç</a></p>{% endif %}
+<p style="color:#94a3b8;font-size:12px;">Bu ileti BranchOps tarafından otomatik gönderildi ({{ recipient_role_tr }}). Kişisel veriler maskelenmiştir.</p>
+</body></html>

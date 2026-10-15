@@ -40,3 +40,10 @@ def assert_internal_url(url: str, network: NetworkSettings, *, purpose: str) -> 
     raise ExternalEndpointError(
         f"{purpose}: host '{host}' is not in network.allowed_host_suffixes; refusing external endpoint"
     )
+
+
+def assert_internal_host(host: str, network: NetworkSettings, *, purpose: str) -> None:
+    """Same rule as :func:`assert_internal_url` for non-HTTP endpoints (e.g. the SMTP relay)."""
+    if not host or "/" in host or "@" in host:
+        raise ExternalEndpointError(f"{purpose}: invalid host {host!r}")
+    assert_internal_url(f"https://{host}", network, purpose=purpose)

@@ -211,12 +211,20 @@ class McpAuthMiddleware:
             await _json(send, exc.status, {"error": exc.reason, "detail": exc.detail}, extra)
             return
         scope.setdefault("state", {})[CALLER_STATE_KEY] = caller
-        limit = self._settings.mcp.max_request_bytes
+        limit = request_limit(self._settings)
         declared = headers.get("content-length", "")
         if declared.isdigit() and int(declared) > limit:
             await _json(send, 413, {"error": "too_large", "detail": f"request body over {limit} bytes"}, [])
             return
         await self.app(scope, _limited(receive, limit), send)
+
+
+def request_limit(settings: Settings) -> int:
+    """JSON-RPC body limit; with reporting enabled it must fit one base64 attachment (+ JSON overhead)."""
+    limit = settings.mcp.max_request_bytes
+    if settings.reporting.enabled:
+        limit = max(limit, (settings.attachments.max_bytes * 4) // 3 + 64 * 1024)
+    return limit
 
 
 class RequestTooLargeError(Exception):

@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -264,3 +264,223 @@ class AuditLog(Base):
     resource_id: Mapped[str | None] = mapped_column(String(200))
     correlation_id: Mapped[str | None] = mapped_column(String(64))
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class OutboxMixin:
+    """Columns shared by the transactional outboxes (claimed with SKIP LOCKED + lease, like the inbox)."""
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    idempotency_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
+    incident_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(120))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TicketingOutbox(OutboxMixin, Base):
+    """Ticket operations for reported incidents (create_ticket, add_comment, add_attachment)."""
+
+    __tablename__ = "ticketing_outbox"
+    __table_args__ = (Index("ix_ticketing_outbox_claim", "status", "available_at"),)
+
+
+class OwnershipTeam(Base):
+    __tablename__ = "teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="app_owner")
+    email: Mapped[str | None] = mapped_column(String(320))
+    zoom_channel_id: Mapped[str | None] = mapped_column(String(200))
+    zoom_webhook_secret_ref: Mapped[str | None] = mapped_column(String(120))
+    jira_project_key: Mapped[str | None] = mapped_column(String(30))
+    oncall_contact: Mapped[str | None] = mapped_column(String(300))
+    working_hours: Mapped[str | None] = mapped_column(String(120))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OwnedApplication(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    owner_team_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("teams.id", ondelete="RESTRICT"), nullable=False
+    )
+    default_screen_owner_team_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("teams.id", ondelete="RESTRICT")
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OwnedScreen(Base):
+    __tablename__ = "screens"
+    __table_args__ = (UniqueConstraint("application_id", "key", name="uq_screens_application_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    application_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    route_pattern: Mapped[str | None] = mapped_column(String(300))
+    owner_team_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("teams.id", ondelete="RESTRICT"), nullable=False
+    )
+    tags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class RoutingRuleRow(Base):
+    __tablename__ = "routing_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    match: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    notify_to_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    cc_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    channels: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+
+
+class OwnershipChange(Base):
+    """Append-only history of every registry write (who, when, before/after)."""
+
+    __tablename__ = "ownership_changes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False, index=True
+    )
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    entity: Mapped[str] = mapped_column(String(20), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    correlation_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class IncidentDraftToken(Base):
+    """Short-lived token from check_incident_draft: attachments can be uploaded before the report."""
+
+    __tablename__ = "incident_drafts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    incident_key: Mapped[str | None] = mapped_column(String(200))
+    bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Attachment(Base):
+    """Screenshot / log attached to an incident (or to a draft until the report is submitted)."""
+
+    __tablename__ = "attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    incident_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("incident_drafts.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(200), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage: Mapped[str] = mapped_column(String(20), nullable=False)
+    storage_ref: Mapped[str] = mapped_column(String(300), nullable=False)
+    # Content for the PostgreSQL store (size-capped by settings.attachments.max_bytes); NULL for S3.
+    data: Mapped[bytes | None] = mapped_column(BYTEA)
+    blurred_regions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class IncidentAppContext(Base):
+    """Masked technical context reported by an in-app agent (routing input; never sent to the LLM)."""
+
+    __tablename__ = "incident_app_context"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    security_flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentRouting(Base):
+    """Current routing decision of a reported incident (owner, To/CC teams, how it was matched)."""
+
+    __tablename__ = "incident_routing"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    owner_team_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    to_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    cc_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    channels: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    matched_level: Mapped[str] = mapped_column(String(40), nullable=False)
+    unowned_screen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    screen_unregistered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    application_key: Mapped[str | None] = mapped_column(String(64))
+    screen_key: Mapped[str | None] = mapped_column(String(64))
+    matched_rule_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    reasons: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    decided_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    first_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationOutbox(OutboxMixin, Base):
+    """One notification to one recipient on one channel; idempotent per incident/event/channel/recipient."""
+
+    __tablename__ = "notification_outbox"
+    __table_args__ = (Index("ix_notification_outbox_claim", "status", "available_at"),)
+
+    event: Mapped[str] = mapped_column(String(40), nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(320), nullable=False)
+    team_id: Mapped[int | None] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(10), nullable=False, default="to")  # to | cc

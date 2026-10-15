@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from branchops.api.dependencies import AppServices
 from branchops.api.middleware import CorrelationIdMiddleware, SecurityHeadersMiddleware
-from branchops.api.routes import health, issues, webhooks
+from branchops.api.routes import health, issues, ownership, routing, webhooks
 from branchops.application.queries.read_models import ReadModels
 from branchops.config.settings import Settings
 from branchops.container import Container
@@ -49,4 +49,7 @@ def create_app(settings: Settings, container: Container | None = None) -> FastAP
     app.include_router(health.router)
     app.include_router(webhooks.router)
     app.include_router(issues.router)
+    app.include_router(ownership.router)
+    app.include_router(ownership.admin)
+    app.include_router(routing.router)
     return app

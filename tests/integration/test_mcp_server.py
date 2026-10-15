@@ -21,6 +21,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 
+from branchops.config.settings import Settings
 from branchops.container import Container
 from branchops.infrastructure.database.models import Analysis, AuditLog, Issue, IssueComment, WebhookInbox
 from branchops.infrastructure.database.session import Database
@@ -118,9 +119,13 @@ def seed(db: Database) -> None:
 
 
 def run_as[T](
-    db: Database, user: str, groups: list[str], scenario: Callable[[Client[Any]], Awaitable[T]]
+    db: Database,
+    user: str,
+    groups: list[str],
+    scenario: Callable[[Client[Any]], Awaitable[T]],
+    settings: Settings | None = None,
 ) -> T:
-    settings = mcp_settings(database={"url": db.engine.url.render_as_string(hide_password=False)})
+    settings = settings or mcp_settings(database={"url": db.engine.url.render_as_string(hide_password=False)})
     container = Container.__new__(Container)
     container.settings = settings
     container.db = db
