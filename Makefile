@@ -171,13 +171,15 @@ llm-health: ## Check the configured model endpoint from inside the stack
 	$(COMPOSE) exec worker branchops llm health
 
 ##@ Run from the virtualenv (against `make db`)
-.PHONY: run-api run-worker run-dashboard
+.PHONY: run-api run-worker run-dashboard run-mcp
 run-api: ## branchops api with config/local.yaml
 	BRANCHOPS_CONFIG=config/local.yaml JIRA_WEBHOOK_SECRETS=$(WEBHOOK_SECRET) $(BIN)/branchops api
 run-worker: ## branchops worker with config/local.yaml
 	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops worker
 run-dashboard: ## branchops dashboard with config/local.yaml
 	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops dashboard
+run-mcp: ## branchops mcp (read-only MCP server on 127.0.0.1:8095/mcp) with config/local.yaml
+	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops mcp
 
 ##@ Release (air-gapped)
 .PHONY: lock

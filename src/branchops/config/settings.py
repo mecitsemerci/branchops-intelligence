@@ -224,6 +224,8 @@ class SecuritySettings(BaseModel):
     )
     dev_user: str = "developer"
     dev_roles: list[Role] = Field(default_factory=lambda: [Role.ADMIN])
+    # IdP groups of the dev principal (``auth_mode: dev`` only); used for MCP team resolution.
+    dev_groups: list[str] = Field(default_factory=list)
     masking_extra_patterns: list[tuple[str, str]] = Field(default_factory=list)
 
 
@@ -254,6 +256,50 @@ class ApiSettings(BaseModel):
     port: int = 8080
 
 
+McpFieldMode = Literal["full", "masked"]
+
+
+class McpTeamSettings(BaseModel):
+    """One consuming team of the MCP server. ``"*"`` in a list means "unrestricted"."""
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,39}$")
+    # IdP groups (from the oauth2-proxy groups header) whose members belong to this team.
+    groups: list[str] = Field(min_length=1)
+    sources: list[str] = Field(default_factory=lambda: ["*"])
+    group_keys: list[str] = Field(default_factory=lambda: ["*"])
+    branch_codes: list[str] = Field(default_factory=lambda: ["*"])
+    # ``masked``: free text (description, comments, evidence) is run through the masker again and
+    # comment authors are hidden.
+    fields: McpFieldMode = "masked"
+    tools: list[str] = Field(default_factory=lambda: ["*"])
+    # Role granted to team members *in the MCP server only* (request_reanalysis needs ANALYST). Team groups
+    # are deliberately not added to ``security.role_groups``: that would let MCP-only users reach the
+    # unscoped API and dashboard. Global roles still apply on top.
+    role: Role = Role.VIEWER
+    # Operational tools (``get_inbox_health``) normally need the ADMIN role; this grants them to the team.
+    ops_access: bool = False
+
+
+class McpSettings(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 8095
+    path: str = Field(default="/mcp", pattern=r"^/[a-z0-9/_-]*$")
+    max_page_size: int = Field(default=50, ge=1, le=200)
+    # Description / comment / evidence text longer than this is truncated in tool output (marked).
+    max_text_chars: int = Field(default=4000, ge=200, le=100_000)
+    rate_limit_per_minute: int = Field(default=120, ge=1)
+    # JSON-RPC requests are small (tool name + arguments); larger bodies are rejected with 413.
+    max_request_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
+    teams: list[McpTeamSettings] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique_teams(self) -> McpSettings:
+        ids = [t.id for t in self.teams]
+        if len(ids) != len(set(ids)):
+            raise ValueError("mcp team ids must be unique")
+        return self
+
+
 class Settings(BaseModel):
     app: AppSettings = AppSettings()
     api: ApiSettings = ApiSettings()
@@ -271,6 +317,7 @@ class Settings(BaseModel):
     network: NetworkSettings = NetworkSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
     dashboard: DashboardSettings = DashboardSettings()
+    mcp: McpSettings = McpSettings()
 
     @model_validator(mode="before")
     @classmethod
