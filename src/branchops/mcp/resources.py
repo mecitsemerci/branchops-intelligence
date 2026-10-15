@@ -27,18 +27,22 @@ from branchops.mcp.runtime import McpRuntime
 from branchops.mcp.tools import template_detail
 from branchops.scoring import completeness, quality
 
-_MEMBER_RE = re.compile(r"^\s{4}([A-Z_]+)\s{2,}(\S.*)$")
+_MEMBER_RE = re.compile(r"^([A-Z_]+)\s{2,}(\S.*)$")
 
 
 def enum_meanings(enum: type[StrEnum]) -> dict[str, str]:
-    """``NAME  description`` lines of an enum docstring (continuation lines are joined)."""
+    """``NAME  description`` lines of an enum docstring (indented continuation lines are joined).
+
+    The docstring is normalised with ``inspect.cleandoc`` first: Python 3.13 strips the common indentation at
+    compile time, 3.12 does not.
+    """
     meanings: dict[str, str] = {}
     current: str | None = None
-    for line in (enum.__doc__ or "").splitlines():
+    for line in inspect.cleandoc(enum.__doc__ or "").splitlines():
         if m := _MEMBER_RE.match(line):
             current = m.group(1)
             meanings[current] = m.group(2).strip()
-        elif current and line.strip() and line.startswith(" " * 8):
+        elif current and line.strip() and line[0].isspace():
             meanings[current] += " " + line.strip()
         else:
             current = None

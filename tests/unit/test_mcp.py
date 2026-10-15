@@ -13,6 +13,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from sqlalchemy.dialects import postgresql
 
+from branchops.application.commands.ownership import OwnershipService
 from branchops.application.queries.scope import QueryScope, ScopeGrant
 from branchops.config.settings import Settings
 from branchops.container import Container
@@ -311,6 +312,23 @@ class TestServer:
         assert len(db.audit[2].details["requested_tool"]) == 200
         assert all(a.action == "mcp_tool_call" and a.actor == "developer" for a in db.audit)
         assert db.audit[1].details["rows"] == 1 and db.audit[1].details["duration_ms"] >= 0
+
+    def test_ownership_tools_are_in_the_catalogue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        team = {"id": "embedded", "groups": ["branchops-embedded"], "tools": ["resolve_owner", "list_teams"]}
+        settings = make_settings(
+            mcp={"teams": [team]}, security={"auth_mode": "dev", "dev_groups": ["branchops-embedded"]}
+        )
+        validate_mcp_settings(settings, TOOL_NAMES)  # used to reject both names as unknown
+        monkeypatch.setattr(OwnershipService, "teams", lambda self: [])
+        container, db = fake_container(settings)
+        server, _ = build_server(settings, container, stdio=True)
+
+        async def scenario() -> Any:
+            async with Client(server) as client:
+                return (await client.call_tool("list_teams", {})).structured_content
+
+        assert asyncio.run(scenario()) == {"items": []}
+        assert [(a.resource_id, a.details["outcome"]) for a in db.audit] == [("list_teams", "ok")]
 
     def test_stdio_is_refused_outside_dev_auth(self) -> None:
         container, _ = fake_container(mcp_settings())

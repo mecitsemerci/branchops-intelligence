@@ -214,6 +214,9 @@ dashboard:
   host: 127.0.0.1
   port: 8090
   title: BranchOps Intelligence
+  # External base URL of the dashboard, used for incident links in notifications and tickets
+  # (e.g. https://branchops.apps.bank.internal). Unset = messages carry no link.
+  public_url: null
   storage_secret_env: DASHBOARD_STORAGE_SECRET
 
 # Read-only MCP server (`branchops mcp`, docs/mcp-server.md). Callers authenticate through the oauth2-proxy
