@@ -142,7 +142,11 @@ class IssueRepository:
     def latest_input_hash(self, session: Session, issue_key: str) -> str | None:
         return session.execute(
             select(Analysis.input_hash)
-            .where(Analysis.issue_key == issue_key, Analysis.status != "FAILED")
+            # RUNNING/FAILED rows are in-flight or aborted attempts and must not suppress a retry.
+            .where(
+                Analysis.issue_key == issue_key,
+                Analysis.status.in_(["COMPLETED", "PARTIAL", "NEEDS_REVIEW"]),
+            )
             .order_by(Analysis.started_at.desc())
             .limit(1)
         ).scalar_one_or_none()

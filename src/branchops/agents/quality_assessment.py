@@ -20,7 +20,9 @@ AGENT_NAME = "quality_assessment"
 class FieldLevelOutput(BaseModel):
     field: str
     level: RubricLevel = Field(description="GOOD, ACCEPTABLE or POOR (ABSENT only if the value is empty)")
-    reason: str = Field(default="", max_length=400, description="one sentence referring to the rubric")
+    reason: str = Field(
+        default="", max_length=400, description="one sentence in Turkish referring to the rubric"
+    )
     evidence: list[EvidenceQuote] = Field(default_factory=list, max_length=2)
 
 

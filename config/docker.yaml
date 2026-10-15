@@ -1,6 +1,9 @@
 # Configuration for the docker compose stack (deploy/docker/compose.yaml).
-# Defaults: mock model provider and dev authentication. To use a real OpenAI-compatible endpoint set
-# LLM_PROVIDER=openai-compatible, LLM_BASE_URL, LLM_MODEL and LLM_API_KEY in .env (see .env.example).
+#
+# Model: by default the agents use Gemma 3 (branchops-gemma3:4b = gemma3:4b with a 16k context) served by
+# Ollama's OpenAI-compatible API — on the host (LLM_MODE=host, GPU/Metal accelerated) or in the
+# `ollama` compose service (LLM_MODE=docker). LLM_MODE=mock uses the deterministic mock provider.
+# All values below can be overridden through environment variables / .env (see .env.example).
 app:
   environment: development
   log_level: ${LOG_LEVEL:-INFO}
@@ -13,20 +16,36 @@ jira:
     branch_code: ${JIRA_FIELD_BRANCH_CODE:-customfield_10101}
     application: ${JIRA_FIELD_APPLICATION:-customfield_10102}
 llm:
-  provider: ${LLM_PROVIDER:-mock}
-  base_url: ${LLM_BASE_URL:-}
-  model: ${LLM_MODEL:-GLM-5.3-Flash}
+  provider: ${LLM_PROVIDER:-openai-compatible}
+  base_url: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+  model: ${LLM_MODEL:-branchops-gemma3:4b}
+  api_key_env: LLM_API_KEY
   ca_bundle: ${LLM_CA_BUNDLE:-}
-workflow: {checkpointer: postgres}
+  timeout_seconds: ${LLM_TIMEOUT_SECONDS:-300}
+  max_retries: 1
+  temperature: 0
+  max_output_tokens: 3072
+  capabilities:
+    structured_outputs: true      # Ollama supports response_format json_schema (grammar-constrained)
+    json_mode: true
+    tool_calling: false
+    context_length: 16384
+    max_output_tokens: 4096
+workflow:
+  checkpointer: postgres
+  node_timeout_seconds: 600
+  max_repair_attempts: 1
+  max_input_chars: 12000
 worker:
-  concurrency: ${WORKER_CONCURRENCY:-2}
+  concurrency: ${WORKER_CONCURRENCY:-1}   # one local model instance: process one issue at a time
   poll_interval_seconds: 1
+  lease_seconds: 300            # renewed every 100 s while a run is alive; a killed run is retried after 5 min
   health_port: 8081
 security:
   auth_mode: dev
   dev_user: developer
   dev_roles: [ADMIN]
 network:
-  # "host.docker.internal" lets the stack reach a model server running on the developer machine.
-  allowed_host_suffixes: [".svc", ".svc.cluster.local", ".internal", ".local", "localhost", "host.docker.internal"]
+  # Development hosts: the host machine (host Ollama) and the in-compose "ollama" service.
+  allowed_host_suffixes: [".svc", ".svc.cluster.local", ".internal", ".local", "localhost", "host.docker.internal", "ollama"]
 templates: {directory: /app/templates}

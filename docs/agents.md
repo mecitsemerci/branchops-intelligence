@@ -35,6 +35,14 @@ flowchart TD
 Final status: `COMPLETED` · `PARTIAL` (some step degraded) · `NEEDS_REVIEW` · `FAILED` (not persisted by
 the workflow; the inbox records the error).
 
+## Live progress
+
+`DatabaseProgressReporter` (port `ProgressReporter`) records, while a run is in flight: the `analyses`
+row with status `RUNNING`, `worker_id`, `current_step` and a heartbeat, plus one `agent_steps` row per
+finished step. Each graph node is wrapped (`_tracked`) to report start/finish; failures mark the row
+`FAILED` until the inbox retry restarts it. The dashboard's **Canlı Akış** page (`/live`) polls
+`read_models.live_activity()` every 2 seconds. Progress writes are best effort and never fail a run.
+
 ## Structured output handling (`agents/base.py`)
 
 1. **Mode selection** from capabilities: `json_schema` → `json_object` → prompt-only. If the gateway
@@ -52,8 +60,8 @@ the workflow; the inbox records the error).
 
 | Agent | Input | Output (validated) | Deterministic guards |
 |---|---|---|---|
-| **ClassificationAgent** | issue envelope + taxonomy from templates | category, subcategory, application, business process, confidence, evidence | category/subcategory must be in the template taxonomy; HIGH confidence without a verified quote → MEDIUM; `OTHER` → LOW |
-| **ExtractionAgent** | issue envelope + field guide | per-field status (`PRESENT/VAGUE/UNKNOWN/NOT_APPLICABLE/MISSING`), value, quotes | PRESENT/VAGUE require a value **and** a quote; values whose quotes cannot be found in the source (and that do not occur verbatim) become `UNKNOWN`; Jira custom fields override model values |
+| **ClassificationAgent** | issue envelope + taxonomy + category descriptions from templates | category, subcategory, application, business process, confidence, evidence | the JSON Schema enumerates the allowed categories/subcategories (grammar-constrained in json_schema mode) and a validator checks the pair; HIGH confidence without a verified quote → MEDIUM; `OTHER` → LOW |
+| **ExtractionAgent** | issue envelope + field guide | per-field status (`PRESENT/VAGUE/UNKNOWN/NOT_APPLICABLE/MISSING`), value, quotes | claims without a value become MISSING (normalised, no repair round-trip); values whose quotes cannot be found in the source (and that do not occur verbatim) become `UNKNOWN`; Jira custom fields override model values |
 | **QualityAssessmentAgent** | present fields + template rubric + validation problems | rubric level per field (`GOOD/ACCEPTABLE/POOR/ABSENT`) + reason | must cover exactly the requested fields; levels are clamped by Python (missing → ABSENT, validation failure or INSUFFICIENT → max POOR); never outputs numbers |
 | **SimilarityAgent** | current fingerprint + shortlisted candidates | verdict per candidate (`DUPLICATE_CANDIDATE/RELATED/UNRELATED`) | candidates come only from SQL; keys must be in the shortlist; `DUPLICATE_CANDIDATE` only if the duplicate gate passes (same branch + 72 h window + same application/error signature/subcategory) |
 | **RecommendationAgent** | gaps (missing/insufficient/unknown fields) + template hints | one Turkish message per gap | may only address gap fields; priorities are computed by Python; template hints are used when the model fails |

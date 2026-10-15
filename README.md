@@ -40,30 +40,51 @@ flowchart LR
 Requirements: Docker with Compose v2, GNU make, Python 3.12 (only for `make seed` and the virtualenv
 targets). `make help` lists every target.
 
-### Full stack in Docker
+### Full stack in Docker — Gemma agents + simulated Jira traffic
 
 ```bash
-make up          # build the image, start postgres → migrate → api, worker, dashboard (waits for health)
-make seed        # send signed synthetic Turkish Jira webhooks (samples/jira)
-make overview    # analytics from the API
-open http://localhost:8090   # dashboard
+make up                      # Gemma via host Ollama (default) + random incidents every 5 minutes
+open http://localhost:8090/live   # live agent view: who is doing what, workflow diagram per run
+make sim-once                # one more random incident right now
 make logs SERVICE=worker
-make up WORKERS=3            # scale workers
 make down                    # stop (make clean-docker also deletes the database volume)
 ```
+
+| LLM_MODE | Model server | Notes |
+|---|---|---|
+| `host` (default) | Ollama on this machine, `http://host.docker.internal:11434/v1` | fastest (Metal/GPU); `make model` pulls `gemma3:4b` and creates `branchops-gemma3:4b` (16k context, temperature 0) |
+| `docker` | `ollama` compose service (profile `ollama`) | no host install needed; CPU inside Docker, slower |
+| `mock` | none | deterministic keyword rules, for offline/CI |
+
+`make up LLM_MODE=docker` / `make up LLM_MODE=mock` switch modes. The **simulator** service posts a
+random Turkish branch incident every `SIMULATOR_INTERVAL_SECONDS` (default 300 s, ±10 % jitter) after a
+burst of `SIMULATOR_INITIAL_BURST` (default 2) — mixed categories, complete/partial/vague profiles,
+near-duplicates, recurring error codes and follow-up comments that add missing information (so score
+improvements appear). `make sim-stop` / `make sim-start` pause and resume it. With a local 4B model an
+analysis takes roughly 1–2 minutes, well inside the 5-minute arrival interval.
+
+The **Canlı Akış** (`/live`) page refreshes every 2 seconds and shows:
+queue/worker KPIs; one card per workflow node (LLM agents and deterministic steps) with the issue it is
+working on, the worker, elapsed time, its latest output and 24 h statistics; a LangGraph diagram per
+running analysis with node states (waiting / running / done / failed / skipped); recently finished
+analyses with their per-node outcome strip and a diagram + step table on demand; incoming webhook events
+and active workers.
+
+Other targets: `make seed` (fixed samples), `make overview`, `make up WORKERS=3`, `make health`.
 
 | Service | URL / port | Notes |
 |---|---|---|
 | api | http://localhost:8080 | `/api/webhooks/jira`, `/api/*`, `/health/*`, `/metrics` |
 | dashboard | http://localhost:8090 | dev auth (ADMIN) |
 | worker | :8081 inside the container | `/healthz`, `/readyz`, `/metrics` (`make health`) |
+| simulator | — | posts random incidents to the api (`simulate` command) |
 | postgres | localhost:55432 | `branchops/branchops`, databases `branchops` and `branchops_test` |
 
 The containers run like on OpenShift: arbitrary non-root UID in group 0, read-only root filesystem,
 writable `/tmp` only, all capabilities dropped. Configuration: `config/docker.yaml`; overrides via `.env`
-(see `.env.example`). The default model provider is the deterministic **mock**; to use a real
-OpenAI-compatible endpoint set `LLM_PROVIDER=openai-compatible`, `LLM_BASE_URL`, `LLM_MODEL`,
-`LLM_API_KEY` in `.env`, run `make up` and check with `make llm-health`.
+(see `.env.example`). Any other OpenAI-compatible endpoint works the same way: set `LLM_BASE_URL`,
+`LLM_MODEL`, `LLM_API_KEY` in `.env` and check with `make llm-health`. Ollama and the Gemma download
+are a developer-laptop convenience; in the bank the worker uses the internal inference gateway.
 
 The compose build uses the same Dockerfile as production with `WHEELHOUSE_SOURCE=online` (packages from
 `PIP_INDEX_URL`, default PyPI; point it at your mirror inside the bank). Production builds use

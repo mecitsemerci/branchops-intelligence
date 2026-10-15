@@ -120,7 +120,7 @@ class WorkflowSettings(BaseModel):
     node_timeout_seconds: float = 300.0
     max_repair_attempts: int = Field(default=1, ge=0, le=3)
     max_input_chars: int = 24_000
-    prompt_version: str = "2026.10-1"
+    prompt_version: str = "2026.10-2"
     similarity: SimilaritySettings = SimilaritySettings()
 
 

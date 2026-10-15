@@ -76,7 +76,7 @@ workflow:
   node_timeout_seconds: 300
   max_repair_attempts: 1
   max_input_chars: 24000
-  prompt_version: "2026.10-1"
+  prompt_version: "2026.10-2"
   similarity:
     candidate_limit: 20
     lookback_days: 180

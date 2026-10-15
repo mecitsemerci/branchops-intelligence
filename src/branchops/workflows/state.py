@@ -18,6 +18,7 @@ class AnalysisState(TypedDict, total=False):
     inbox_event_id: str | None
     input_hash: str
     allow_degraded: bool
+    worker_id: str | None
     started_at: str
     snapshot: dict[str, Any]
 

@@ -207,11 +207,29 @@ class TestExtraction:
         assert canonical.field("error_details").state is FieldState.UNKNOWN
         assert canonical.field("summary").state is FieldState.SUFFICIENT
 
-    def test_present_without_evidence_rejected_by_schema(self) -> None:
-        with pytest.raises(ValueError):
-            ExtractionOutput.model_validate(
-                {"fields": [{"field": "branch_code", "status": "PRESENT", "value": "1"}]}
-            )
+    def test_claims_without_value_or_evidence_are_normalised(self) -> None:
+        snap = snapshot()
+        out = ExtractionOutput.model_validate(
+            {
+                "fields": [
+                    {"field": "application_version", "status": "PRESENT", "value": " "},
+                    {
+                        "field": "application",
+                        "status": "PRESENT",
+                        "value": "Gişe Ekranı",
+                    },  # verbatim, no quote
+                    {
+                        "field": "environment",
+                        "status": "PRESENT",
+                        "value": "Windows 11",
+                    },  # invented, no quote
+                ]
+            }
+        )
+        assert out.fields[0].status == "MISSING"
+        canonical = build_canonical_issue(snap, issue_sources(snap), None, out, "m")
+        assert canonical.field("application").state is FieldState.SUFFICIENT
+        assert canonical.field("environment").state is FieldState.UNKNOWN
 
 
 def _candidate(key: str, **kw: object) -> CandidateIssue:
@@ -325,3 +343,20 @@ class TestReporting:
         provider = ScriptedProvider({"ReportOutput": [lambda r: good]})
         _, source = ReportingAgent(StructuredCaller(provider)).run(self.metrics, "c")
         assert source == "model"
+
+
+def test_similarity_drops_verdicts_for_unknown_issues() -> None:
+    from branchops.agents.similarity import SimilarityOutput, constrained_schema
+
+    out = SimilarityOutput.model_validate(
+        {
+            "verdicts": [
+                {"issue_key": "SELF-1", "relationship": "RELATED"},
+                {"issue_key": "A-1", "relationship": "UNRELATED"},
+            ]
+        },
+        context={"candidates": {"A-1"}},
+    )
+    assert [v.issue_key for v in out.verdicts] == ["A-1"]
+    schema = constrained_schema(("A-1", "A-2")).model_json_schema()
+    assert "A-2" in str(schema)

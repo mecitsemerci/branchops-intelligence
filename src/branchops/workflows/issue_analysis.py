@@ -28,7 +28,13 @@ from branchops.agents.quality_assessment import QualityAssessmentAgent
 from branchops.agents.recommendation import RecommendationAgent, deterministic_recommendations
 from branchops.agents.similarity import IssueFingerprint, SimilarityAgent, shortlist
 from branchops.application.interfaces.model_provider import ModelRequestError, ModelUnavailableError
-from branchops.application.interfaces.repositories import AnalysisSink, HistoricalIssueReader
+from branchops.application.interfaces.repositories import (
+    AnalysisSink,
+    HistoricalIssueReader,
+    NullProgressReporter,
+    ProgressReporter,
+    RunInfo,
+)
 from branchops.config.settings import WorkflowSettings
 from branchops.domain.entities.analysis import (
     AnalysisResult,
@@ -110,6 +116,7 @@ class IssueAnalysisWorkflow:
         sink: AnalysisSink,
         settings: WorkflowSettings,
         checkpointer: Any = None,
+        progress: ProgressReporter | None = None,
     ) -> None:
         self._caller = caller
         self._registry = registry
@@ -123,6 +130,7 @@ class IssueAnalysisWorkflow:
         self._similarity = SimilarityAgent(caller)
         self._recommender = RecommendationAgent(caller)
         self._checkpointer = checkpointer
+        self._progress: ProgressReporter = progress or NullProgressReporter()
         self.graph = self._build().compile(checkpointer=checkpointer)
 
     @property
@@ -136,20 +144,42 @@ class IssueAnalysisWorkflow:
         transient_retry = RetryPolicy(
             max_attempts=2, initial_interval=2.0, retry_on=lambda e: isinstance(e, ModelUnavailableError)
         )
-        g.add_node("normalize", self._normalize)
-        g.add_node("classify", self._classify, retry_policy=transient_retry)
-        g.add_node("select_template", self._select_template)
-        g.add_node("extract", self._extract, retry_policy=transient_retry)
-        g.add_node("assess_quality", self._assess_quality, retry_policy=transient_retry)
-        g.add_node("score", self._score)
-        g.add_node("similarity", self._similarity_node, retry_policy=transient_retry)
-        g.add_node("recommend", self._recommend, retry_policy=transient_retry)
-        g.add_node("persist", self._persist)
+        nodes: list[tuple[str, Callable[[AnalysisState], dict[str, Any]], RetryPolicy | None]] = [
+            ("normalize", self._normalize, None),
+            ("classify", self._classify, transient_retry),
+            ("select_template", self._select_template, None),
+            ("extract", self._extract, transient_retry),
+            ("assess_quality", self._assess_quality, transient_retry),
+            ("score", self._score, None),
+            ("similarity", self._similarity_node, transient_retry),
+            ("recommend", self._recommend, transient_retry),
+            ("persist", self._persist, None),
+        ]
+        for name, fn, retry in nodes:
+            action: Any = self._tracked(name, fn)
+            g.add_node(name, action, retry_policy=retry)
         g.add_edge(START, "normalize")
         for a, b in itertools.pairwise(NODES):
             g.add_edge(a, b)
         g.add_edge("persist", END)
         return g
+
+    def _tracked(
+        self, name: str, fn: Callable[[AnalysisState], dict[str, Any]]
+    ) -> Callable[[AnalysisState], dict[str, Any]]:
+        """Report node start/finish to the live progress reporter (best effort, never raises)."""
+
+        def node(state: AnalysisState) -> dict[str, Any]:
+            analysis_id = state["analysis_id"]
+            self._progress.step_started(analysis_id, name)
+            update = fn(state)
+            if name != "persist":  # persist writes the final step list itself
+                for record in update.get("steps", []):
+                    self._progress.step_finished(analysis_id, StepRecord.model_validate(record))
+            return update
+
+        node.__name__ = name
+        return node
 
     def run(self, initial: AnalysisState, thread_id: str) -> AnalysisResult:
         """Run (or resume) the workflow. ``thread_id`` must be stable across retries of the same event."""
@@ -158,16 +188,36 @@ class IssueAnalysisWorkflow:
             "recursion_limit": len(NODES) + 5,
         }
         inputs: AnalysisState | None = initial
+        resumed = False
         if self._checkpointer is not None:
             existing = self.graph.get_state(config)
             if existing.next and existing.values.get("input_hash") == initial.get("input_hash"):
                 logger.info("resuming analysis from checkpoint", extra={"next": list(existing.next)})
                 self.graph.update_state(config, {"allow_degraded": initial.get("allow_degraded", False)})
                 inputs = None
+                resumed = True
+        self._progress.run_started(
+            RunInfo(
+                analysis_id=initial["analysis_id"],
+                issue_key=initial["issue_key"],
+                correlation_id=initial["correlation_id"],
+                inbox_event_id=initial.get("inbox_event_id"),
+                input_hash=initial["input_hash"],
+                prompt_version=self._settings.prompt_version,
+                started_at=datetime.fromisoformat(initial["started_at"]),
+                worker_id=initial.get("worker_id"),
+                model_id=self.model_id,
+                resumed=resumed,
+            )
+        )
         with tracer().start_as_current_span("workflow.issue_analysis") as span:
             span.set_attribute("branchops.issue_key", initial.get("issue_key", ""))
             span.set_attribute("branchops.correlation_id", initial.get("correlation_id", ""))
-            final: AnalysisState = self.graph.invoke(inputs, config)  # type: ignore[assignment]
+            try:
+                final: AnalysisState = self.graph.invoke(inputs, config)  # type: ignore[assignment]
+            except Exception as exc:
+                self._progress.run_failed(initial["analysis_id"], f"{type(exc).__name__}: {exc}")
+                raise
         if self._checkpointer is not None:
             try:
                 self._checkpointer.delete_thread(thread_id)
@@ -240,6 +290,7 @@ class IssueAnalysisWorkflow:
                 issue_block=state["issue_block"],
                 sources=state["sources"],
                 taxonomy=self._registry.taxonomy(),
+                category_descriptions=self._registry.category_descriptions(),
                 correlation_id=state["correlation_id"],
                 deadline=self._deadline(),
             )
