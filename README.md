@@ -19,8 +19,8 @@ flowchart LR
     W[Worker · LangGraph] -->|FOR UPDATE SKIP LOCKED| PG
     W -->|OpenAI-compatible, TLS| M[Internal LLM gateway<br/>GLM-5.3-Flash]
     D[Dashboard · NiceGUI] --> PG
-    C[Other teams' MCP clients] -->|SSO bearer token| X[MCP server · read-only]
-    X -->|team-scoped SQL| PG
+    C[Other teams' MCP clients<br/>embedded app agents] -->|SSO bearer token| X[MCP · FastMCP]
+    X -->|team-scoped reads,<br/>reports into the inbox| PG
 ```
 
 ## Features
@@ -37,10 +37,10 @@ flowchart LR
 | Deterministic completeness & quality scoring with versioned policy | `scoring/` |
 | Evidence verification (anti-hallucination), PII masking, prompt-injection flags | `domain/services/` |
 | Similar / duplicate / recurring incidents (PostgreSQL FTS `turkish` + error signatures) | `agents/similarity.py`, `issue_repository.py` |
-| Dashboard: overview, explorer, issue detail, quality analytics, agent executions, dead letters | `dashboard/` |
+| Dashboard: overview, explorer, issue detail, quality analytics, agent executions, dead letters, live agent view (`/live`), ownership administration (`/yonetim`), notifications (`/bildirimler`) | `dashboard/` |
 | In-app incident reporting via MCP: app context, screenshots (re-encoded, blurred, never sent to the LLM), draft check, Jira ticket outbox | `mcp/reporting.py`, `application/commands/`, [docs](docs/embedded-agent-guide.md) |
 | Screen ownership registry managed in the dashboard (`/yonetim`), deterministic owner routing, e-mail / Zoom notifications through an outbox (branch operations always CC) | `domain/entities/ownership.py`, `application/commands/routing.py`, [docs](docs/ownership-and-routing.md) |
-| Read-only MCP server for other teams (Claude, Cursor, chatbots): team-scoped tools, resources, prompts; audited | `mcp/`, [docs](docs/mcp-server.md) |
+| MCP server (read-mostly: queries plus in-app incident reporting and re-analysis requests) for other teams (Claude, Cursor, chatbots): team-scoped tools, resources, prompts; audited | `mcp/`, [docs](docs/mcp-server.md) |
 | OpenTelemetry metrics (Prometheus) and traces (internal OTLP only) | `infrastructure/observability/` |
 | OpenShift manifests: non-root, read-only FS, probes, NetworkPolicies, HPA, oauth2-proxy SSO | `deploy/openshift/` |
 
@@ -85,7 +85,7 @@ Other targets: `make seed` (fixed samples), `make overview`, `make up WORKERS=3`
 |---|---|---|
 | api | http://localhost:8080 | `/api/webhooks/jira`, `/api/*`, `/health/*`, `/metrics` |
 | dashboard | http://localhost:8090 | dev auth (ADMIN) |
-| mcp | http://localhost:8095/mcp | read-only MCP server, dev auth (`make mcp-health`) |
+| mcp | http://localhost:8095/mcp | MCP server (read-mostly: queries plus in-app incident reporting and re-analysis requests), dev auth (`make mcp-health`) |
 | worker | :8081 inside the container | `/healthz`, `/readyz`, `/metrics` (`make health`) |
 | simulator | — | posts random incidents to the api (`simulate` command) |
 | postgres | localhost:55432 | `branchops/branchops`, databases `branchops` and `branchops_test` |
@@ -121,11 +121,12 @@ make check       # ruff + mypy --strict + all tests (unit + PostgreSQL integrati
 | `branchops import --source csv <file>` | Import a CSV/XLSX/JSONL file through a file-based source (`--dry-run` validates only) |
 | `branchops poll [--source id] [--once]` | Read pull sources on their schedule; one leader across replicas (advisory lock) |
 | `branchops dashboard` | NiceGUI dashboard |
-| `branchops mcp [--stdio]` | Read-only MCP server (streamable HTTP on `mcp.host:port/mcp`; `--stdio` for local development only) |
+| `branchops mcp [--stdio]` | MCP server (read-mostly: queries plus in-app incident reporting and re-analysis requests) (streamable HTTP on `mcp.host:port/mcp`; `--stdio` for local development only) |
 | `branchops migrate` | DB migrations, checkpoint tables, template publication (immutability check) |
 | `branchops templates` | Validate and list templates |
 | `branchops llm health\|probe` | Model gateway health / capability detection |
 | `branchops replay <event-id>` | Requeue a dead-lettered inbox event |
+| `branchops simulate [--once] [--burst N]` | Development/demo only: posts random synthetic incidents to the API (used by the compose `simulator` service; `--once` sends the burst and exits) |
 | `branchops report --days 30` | Model-written operational summary (numbers grounded in SQL metrics) |
 
 ## Tests
@@ -158,8 +159,9 @@ CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite dro
 
 ## Assumptions and limitations
 
-* **Jira access is webhook-only.** Historical issues that never produced a webhook are not known to the
-  system; there is no Jira backfill (a CSV export can be imported through a `csv_import` source instead). An issue first seen through a partial update without summary/description
+* **Jira *ingestion* is webhook-only** (no backfill of historical issues; a CSV export can be imported
+  through a `csv_import` source instead). The only outbound Jira access is the optional ticketing sink
+  (`ticketing.sink: jira`) that opens tickets for incidents reported through MCP. An issue first seen through a partial update without summary/description
   is stored but not analysed until a fuller payload arrives.
 * **Model capabilities are configured, not guessed.** The default assumes JSON-object mode only;
   enable `structured_outputs` (JSON schema) after `branchops llm probe` confirms it. Tool calling is never

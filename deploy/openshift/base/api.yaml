@@ -1,5 +1,6 @@
 # API: FastAPI app bound to 127.0.0.1:8080 behind an oauth2-proxy sidecar (TLS :8443).
-# Jira webhooks and probes bypass SSO via skip-auth routes; the webhook itself is HMAC/token authenticated.
+# Push ingestion (/api/ingest/{source}, legacy /api/webhooks/jira) and probes bypass SSO via skip-auth routes;
+# ingest requests are authenticated per source (HMAC / shared token) by the source adapter.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,6 +44,7 @@ spec:
             - --upstream=http://127.0.0.1:8080/
             - --redirect-url=https://branchops-api.apps.bank.internal/oauth2/callback
             - --skip-auth-route=POST=^/api/webhooks/jira$
+            - --skip-auth-route=POST=^/api/ingest/[a-z0-9_-]+$
             - --skip-auth-route=GET=^/health/
             - --skip-auth-route=GET=^/metrics$
             - --reverse-proxy=false

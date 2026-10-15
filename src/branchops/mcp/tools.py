@@ -20,6 +20,7 @@ from branchops.infrastructure.observability.logging import correlation_id_var
 from branchops.infrastructure.persistence.audit import audit
 from branchops.mcp.auth import Caller
 from branchops.mcp.output import TextRenderer
+from branchops.mcp.ownership_tools import OWNERSHIP_TOOLS
 from branchops.mcp.reporting import REPORTING_TOOLS
 from branchops.mcp.runtime import McpRuntime
 from branchops.templates.model import IssueTemplate
@@ -887,4 +888,5 @@ TOOL_NAMES: frozenset[str] = (
         }
     )
     | REPORTING_TOOLS
+    | OWNERSHIP_TOOLS
 )

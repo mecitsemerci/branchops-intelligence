@@ -64,7 +64,7 @@ webhook:
   max_body_bytes: 1048576          # applies to every push source
 sources:
   - id: jira                       # URL segment and incident-key prefix: [a-z][a-z0-9_-]{0,39}
-    type: jira_webhook             # jira_webhook | servicenow_webhook | csv_import
+    type: jira_webhook             # jira_webhook | servicenow_webhook | csv_import | mcp_report
     enabled: true
     auth: {mode: hmac_or_token, secrets_env: JIRA_WEBHOOK_SECRETS, token_header: X-BranchOps-Webhook-Token}
     allowed_groups: [OPS]          # formerly jira.allowed_projects; empty = all
@@ -79,6 +79,8 @@ sources:
     field_mapping: {summary: Konu, description: Açıklama, branch_code: Sube Kodu, application: Uygulama}
     options: {id_column: Kayıt No, watch_directory: /data/imports}
 ```
+
+`mcp_report` is created automatically when `reporting.enabled` is true and is not configured by hand.
 
 * **Legacy configuration.** Without a `sources` list, the old `jira:` (field mapping, allowed projects)
   and `webhook:` (auth settings) sections are translated into one `jira` source, so existing configuration

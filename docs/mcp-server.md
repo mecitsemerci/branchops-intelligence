@@ -77,7 +77,7 @@ claude mcp add --transport http branchops https://branchops-mcp.apps.bank.intern
 
 **Local development.** `make up` starts the `mcp` compose service at `http://localhost:8095/mcp` with dev
 authentication (no token, every caller is the dev user). `make run-mcp` runs the server from the virtualenv
-with the same URL. `make mcp-health` checks readiness and lists the tools. For a stdio client,
+with the same URL. `make mcp-health` checks readiness and prints the number of registered tools. For a stdio client,
 `branchops --config config/local.yaml mcp --stdio`. Stdio works only with `auth_mode: dev` and is refused in
 production.
 
@@ -138,7 +138,8 @@ mcp:
   a known TCKN, card number or e-mail cannot be used to probe masked text, even when split into pieces.
   Text is stored masked at ingestion anyway; re-masking also covers patterns added later.
 * **Production guard.** With `app.environment: production`, `branchops mcp` refuses to start when no team is
-  configured or `auth_mode` is `dev`. It also refuses unknown tool names in `tools`.
+  configured or `auth_mode` is `dev`. It also refuses unknown tool names in `tools`; `list_teams` and `resolve_owner` are catalogue tools and may
+  be listed there like any other tool.
 
 Keep the oauth2-proxy `OAUTH2_PROXY_ALLOWED_GROUPS` of the MCP sidecar (`deploy/openshift/base/mcp.yaml`) and
 the consumer namespaces in the `branchops-mcp-allow-consumers` NetworkPolicy (production overlay) in sync
@@ -184,7 +185,8 @@ computed deterministically by BranchOps; clients should report them, not recompu
   incident key.
 * **Updates.** Only incidents reported through BranchOps can be updated, and only by callers whose scope
   includes them (or by the reporter while the report is still queued).
-* `list_teams` and `resolve_owner` are read tools and are registered even when reporting is disabled.
+* `list_teams` and `resolve_owner` are read tools: they may be listed in a team's `tools:` like any other
+  tool, and they are registered even when reporting is disabled.
 * **In-app context and attachments.** `draft.app_context` (application, screen, route, error code, recent
   requests, log excerpt, device …) is masked, stored separately, used for routing and never sent to a model.
   Attachments are re-encoded (metadata dropped), blurred where requested, size- and count-limited and never
@@ -215,7 +217,7 @@ Examples (arguments as a client sends them):
 |---|---|
 | `branchops://templates/{template_id}/{version}` | a published template as JSON |
 | `branchops://scoring/policy` | the current scoring policy (credits, thresholds, version) |
-| `branchops://glossary` | categories and subcategories, canonical field names and labels, field states, rubric levels and credits, score definitions, analysis statuses, relationship types, enabled sources. Generated from the enums, scoring modules and templates, never hand-written. |
+| `branchops://glossary` | categories and subcategories, canonical field names and labels, field states, rubric levels and credits, score definitions, analysis statuses, relationship types, enabled sources. Generated from the enums, scoring modules and templates, never hand-written (works on Python 3.12 and 3.13). |
 
 | Prompt | Arguments | Guides the client to |
 |---|---|---|

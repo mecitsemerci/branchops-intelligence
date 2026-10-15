@@ -54,8 +54,10 @@ scores or credentials.
   verification and never able to trigger actions.
 * **Webhook replay**: HMAC does not include a timestamp in Jira's scheme; replays of a captured delivery
   are absorbed by idempotency, and TLS + NetworkPolicy limit capture.
-* **oauth2-proxy skip routes** (`/api/webhooks/jira`, `/health/*`, `/metrics`) bypass SSO by design;
-  `--skip-auth-strip-headers` removes forged identity headers on them. `/metrics` exposes only
+* **oauth2-proxy skip routes** (`POST /api/ingest/{source}`, `POST /api/webhooks/jira`, `/health/*`,
+  `/metrics`) bypass SSO by design; `--skip-auth-strip-headers` removes forged identity headers on them.
+  The ingest endpoints are protected by per-source HMAC/token authentication (and the optional CIDR
+  allow-list), not by SSO: Jira and ServiceNow cannot sign in. Unknown or disabled sources return `404`. `/metrics` exposes only
   aggregate counters; restrict scraping with the monitoring NetworkPolicy.
 * **MCP clients are outside BranchOps' control.** Data returned to a team's MCP client may be sent to that
   team's model and stored in its chat history. Give each team the narrowest scope and `fields: masked`

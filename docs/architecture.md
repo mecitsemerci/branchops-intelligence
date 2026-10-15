@@ -1,15 +1,16 @@
 # Architecture
 
-BranchOps Intelligence is a **modular monolith**: one Python code base (`src/branchops`) deployed as three
-core processes (plus the optional source poller and MCP server) that share the same domain, application and infrastructure layers.
+BranchOps Intelligence is a **modular monolith**: one Python code base (`src/branchops`) deployed as five
+processes: api, worker, dashboard, mcp, and the optional source poller. They share the same domain,
+application and infrastructure layers (one image; see [OpenShift deployment](openshift-deployment.md)).
 
 | Process   | Entry point                 | Responsibility                                                     |
 |-----------|-----------------------------|--------------------------------------------------------------------|
 | API       | `branchops api`             | Push-source ingestion (Jira, ServiceNow, …), read API, health probes, `/metrics` |
 | Worker    | `branchops worker`          | Claims inbox events, merges incident state, runs the analysis workflow; drains the ticketing and notification outboxes; purges old attachments |
-| Dashboard | `branchops dashboard`       | NiceGUI operational dashboard (read-only + re-analysis requests)    |
-| Poller    | `branchops poll`            | Optional: reads pull sources (file drops, …) into the inbox; one leader via advisory lock |
-| MCP       | `branchops mcp`             | Optional: read-only, team-scoped MCP server for other teams' MCP clients; never calls the LLM ([details](mcp-server.md)) |
+| Dashboard | `branchops dashboard`       | NiceGUI operational dashboard: read views, re-analysis and re-route requests, ownership administration (`/yonetim`), notifications (`/bildirimler`) |
+| Poller    | `branchops poll`            | Optional: reads pull sources (file drops, …) into the inbox; one leader via advisory lock (not in the base manifests) |
+| MCP       | `branchops mcp`             | Team-scoped MCP server for other teams' MCP clients (read-mostly: queries plus in-app incident reporting and re-analysis requests); never calls the LLM ([details](mcp-server.md)) |
 
 All of them talk to a single PostgreSQL database. There is no message broker: PostgreSQL is the durable
 inbox and the job-coordination mechanism (`FOR UPDATE SKIP LOCKED` + leases).
@@ -25,7 +26,7 @@ flowchart LR
         Dash[Dashboard pod<br/>NiceGUI] -- read queries --> PG
         Proxy[oauth2-proxy sidecar] --> Dash
         Proxy2[oauth2-proxy sidecar] --> API
-        MCP[MCP pods<br/>FastMCP] -- team-scoped read queries --> PG
+        MCP[MCP pods<br/>FastMCP] -- team-scoped queries, reports --> PG
         Proxy3[oauth2-proxy sidecar] --> MCP
     end
     Users[Bank staff] -- SSO --> Proxy
@@ -47,7 +48,7 @@ flowchart TB
     application[application/ — commands, queries, handlers, interfaces] --> domain
     scoring[scoring/ — deterministic engines] --> domain
     templates[templates/ — registry, conditions, validation] --> domain
-    infrastructure[infrastructure/ — SQLAlchemy, Jira adapter, LLM providers, OTel] -. implements .-> interfaces
+    infrastructure["infrastructure/ — SQLAlchemy, source adapters (jira/servicenow/csv_import/mcp_report), LLM providers, attachments, notifications, ticketing, OTel"] -. implements .-> interfaces
     domain[domain/ — Pydantic entities, value objects, enums, pure services]
 ```
 
@@ -89,7 +90,7 @@ sequenceDiagram
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| AD-1 | Modular monolith, three processes | Small team, single DB, independent scaling of the worker. |
+| AD-1 | Modular monolith, five processes (api, worker, dashboard, mcp, and the optional source poller) | Small team, single DB, independent scaling of the worker. |
 | AD-2 | PostgreSQL inbox instead of Kafka/Redis/Celery | Durable, transactional with domain writes, already operated by the bank. |
 | AD-3 | Synchronous SQLAlchemy + thread-pool worker | LLM calls are I/O bound and few per minute; sync code is simpler to audit. |
 | AD-4 | Out-of-order safety by **timestamp-guarded merge**, not by delivery order | Jira does not guarantee ordering; each field group is only overwritten by a newer `updated` timestamp. |
@@ -109,15 +110,17 @@ See the other documents in `docs/` for the details of each subsystem.
 
 ```
 src/branchops/
-  api/            FastAPI app factory, routes (webhooks, issues, analytics, admin), dependencies, middleware
+  api/            FastAPI app factory; routes: webhooks+ingest, issues (incl. analytics, admin), ownership,
+                  routing+notifications, health; dependencies, middleware
   application/    commands (ingest incident event, re-analysis), handlers (process inbox event), queries (read models), ports (incl. source adapters)
   domain/         Pydantic entities, value objects, enums, pure services (merge, masking, evidence, injection, signatures)
   agents/         logical agents + structured-output caller + prompt envelope
   workflows/      LangGraph state and graph
   scoring/        deterministic completeness/quality engine and versioned policies
   templates/      template contracts, conditions/validation, registry
-  infrastructure/ SQLAlchemy models/session, repositories, source adapters (sources/jira, servicenow, csv_import),
-                  LLM providers, security, observability
+  infrastructure/ SQLAlchemy models/session, repositories, source adapters (sources/jira, servicenow, csv_import,
+                  mcp_report), LLM providers, attachments, notifications, ticketing, security, observability
+                  (jira/adapter.py is a deprecated re-export shim of sources/jira)
   workers/        dispatcher (claim loop, health server), per-event runner (leases, retries), pull-source poller
   dashboard/      NiceGUI pages and components
   mcp/            MCP server: auth/teams, read tools, reporting / ownership tools, resources, prompts, audit middleware
