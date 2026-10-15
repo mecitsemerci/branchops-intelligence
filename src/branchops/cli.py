@@ -214,6 +214,32 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_simulate(args: argparse.Namespace) -> int:
+    """Development/demo: post random Turkish incidents to the API on a schedule."""
+    from branchops.simulator.runner import WebhookSimulator
+
+    configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
+    secret = args.secret or next(
+        (s.strip() for s in os.environ.get("JIRA_WEBHOOK_SECRETS", "").split(",") if s.strip()), ""
+    )
+    if not secret:
+        print("a webhook secret is required (--secret or JIRA_WEBHOOK_SECRETS)", file=sys.stderr)
+        return 1
+    simulator = WebhookSimulator(
+        args.api_url,
+        secret,
+        interval_seconds=args.interval,
+        initial_burst=args.burst,
+        follow_up_probability=args.follow_up,
+        seed=args.seed,
+    )
+    if args.once:
+        simulator.run_once()
+    else:
+        simulator.run_forever()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="branchops", description="BranchOps Intelligence")
     parser.add_argument("--config", help="path to YAML configuration (default: $BRANCHOPS_CONFIG)")
@@ -232,6 +258,19 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("event_id")
     replay.add_argument("--actor", default="operator")
     replay.set_defaults(func=cmd_replay)
+    sim = sub.add_parser("simulate", help="send random synthetic incidents to the API (dev/demo only)")
+    sim.add_argument("--api-url", default=os.environ.get("SIMULATOR_API_URL", "http://localhost:8080"))
+    sim.add_argument("--secret", default=None, help="webhook secret (default: first of JIRA_WEBHOOK_SECRETS)")
+    sim.add_argument(
+        "--interval", type=float, default=float(os.environ.get("SIMULATOR_INTERVAL_SECONDS", "300"))
+    )
+    sim.add_argument("--burst", type=int, default=int(os.environ.get("SIMULATOR_INITIAL_BURST", "2")))
+    sim.add_argument(
+        "--follow-up", type=float, default=float(os.environ.get("SIMULATOR_FOLLOW_UP_PROBABILITY", "0.35"))
+    )
+    sim.add_argument("--seed", type=int, default=None)
+    sim.add_argument("--once", action="store_true", help="send --burst incidents and exit")
+    sim.set_defaults(func=cmd_simulate)
     report = sub.add_parser("report", help="generate an operational summary report")
     report.add_argument("--days", type=int, default=30)
     report.set_defaults(func=cmd_report)

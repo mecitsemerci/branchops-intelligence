@@ -144,9 +144,14 @@ class Analysis(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Live progress (set while the workflow runs; cleared when the analysis is persisted).
+    current_step: Mapped[str | None] = mapped_column(String(60))
+    worker_id: Mapped[str | None] = mapped_column(String(200))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_analyses_issue_started", "issue_key", "started_at"),
+        Index("ix_analyses_status", "status"),
         Index("ix_analyses_started", "started_at"),
     )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 PALETTE = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2", "#db2777", "#65a30d"]
@@ -78,5 +79,77 @@ def history_chart(history: list[dict[str, Any]]) -> dict[str, Any]:
         "series": [
             {"name": "Tamlık", "type": "line", "data": [h["completeness"] for h in history]},
             {"name": "Kalite", "type": "line", "data": [h["quality"] for h in history]},
+        ],
+    }
+
+
+NODE_COLORS = {
+    "pending": "#cbd5e1",
+    "running": "#2563eb",
+    "succeeded": "#16a34a",
+    "failed": "#dc2626",
+    "skipped": "#94a3b8",
+}
+NODE_STATE_TR = {
+    "pending": "bekliyor",
+    "running": "çalışıyor",
+    "succeeded": "tamamlandı",
+    "failed": "hata / bozulmuş",
+    "skipped": "atlandı",
+}
+
+
+def workflow_graph(
+    nodes: tuple[tuple[str, str, bool], ...], states: dict[str, str], compact: bool = False
+) -> dict[str, Any]:
+    """LangGraph pipeline as an ECharts graph; LLM agents are rounded, deterministic steps square."""
+    gap = 125 if compact else 160
+    data = []
+    for i, (node, label, is_agent) in enumerate(nodes):
+        state = states.get(node, "pending")
+        color = NODE_COLORS[state]
+        data.append(
+            {
+                "name": node,
+                "x": i * gap,
+                "y": 0 if i % 2 == 0 else 40,
+                "value": NODE_STATE_TR[state],
+                "symbol": "roundRect" if is_agent else "rect",
+                "symbolSize": [128, 46] if not compact else [110, 40],
+                "itemStyle": {
+                    "color": color,
+                    "borderColor": "#1e3a8a" if state == "running" else "#ffffff",
+                    "borderWidth": 4 if state == "running" else 1,
+                    "shadowBlur": 14 if state == "running" else 0,
+                    "shadowColor": "#60a5fa",
+                },
+                "label": {
+                    "show": True,
+                    "formatter": label.replace(" ", "\n", 1) if is_agent else label,
+                    "color": "#0f172a" if state in ("pending", "skipped") else "#ffffff",
+                    "fontSize": 10 if compact else 11,
+                    "fontWeight": "bold" if is_agent else "normal",
+                },
+            }
+        )
+    links = [{"source": a[0], "target": b[0]} for a, b in itertools.pairwise(nodes)]
+    return {
+        "animationDurationUpdate": 400,
+        "tooltip": {"formatter": "{b}: {c}"},
+        "series": [
+            {
+                "type": "graph",
+                "layout": "none",
+                "roam": False,
+                "edgeSymbol": ["none", "arrow"],
+                "edgeSymbolSize": 8,
+                "lineStyle": {"color": "#64748b", "width": 1.5, "curveness": 0.0},
+                "data": data,
+                "links": links,
+                "left": 60,
+                "right": 60,
+                "top": 40,
+                "bottom": 40,
+            }
         ],
     }

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, create_model, model_validator
 
 from branchops.agents.base import StructuredCaller, StructuredResult
 from branchops.agents.prompts import GUARDRAILS, EvidenceQuote, json_block
@@ -104,7 +104,7 @@ def shortlist(
 class VerdictOutput(BaseModel):
     issue_key: str
     relationship: Literal["DUPLICATE_CANDIDATE", "RELATED", "UNRELATED"]
-    rationale: str = Field(default="", max_length=400)
+    rationale: str = Field(default="", max_length=400, description="one or two sentences in Turkish")
     evidence: list[EvidenceQuote] = Field(default_factory=list, max_length=2)
 
 
@@ -116,10 +116,20 @@ class SimilarityOutput(BaseModel):
         ctx: dict[str, Any] = info.context or {}
         allowed: set[str] | None = ctx.get("candidates")
         if allowed is not None:
-            bad = sorted({v.issue_key for v in self.verdicts} - allowed)
-            if bad:
-                raise ValueError(f"verdicts reference unknown issues {bad}; allowed {sorted(allowed)}")
+            # Verdicts about anything but the shortlisted candidates (e.g. the current issue itself) are
+            # dropped rather than failing the whole step; missing verdicts stay UNVERIFIED_CANDIDATE.
+            self.verdicts = [v for v in self.verdicts if v.issue_key in allowed]
         return self
+
+
+def constrained_schema(candidate_keys: tuple[str, ...]) -> type[SimilarityOutput]:
+    """Schema whose ``issue_key`` enumerates the shortlisted candidates (grammar-constrained decoding)."""
+    key_type: Any = Literal[candidate_keys]  # type: ignore[valid-type]
+    verdict: Any = create_model("VerdictOutput", __base__=VerdictOutput, issue_key=(key_type, ...))
+    model: type[SimilarityOutput] = create_model(
+        "SimilarityOutput", __base__=SimilarityOutput, verdicts=(list[verdict], ...)
+    )
+    return model
 
 
 SYSTEM_PROMPT = (
@@ -170,7 +180,7 @@ class SimilarityAgent:
             agent=AGENT_NAME,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=json_block("candidates", payload),
-            schema=SimilarityOutput,
+            schema=constrained_schema(tuple(sorted(s.issue_key for s in shortlisted))),
             correlation_id=correlation_id,
             validation_context={"candidates": {s.issue_key for s in shortlisted}},
             deadline=deadline,

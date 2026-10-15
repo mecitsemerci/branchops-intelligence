@@ -455,3 +455,57 @@ def test_purged_issue_not_resurrected_by_late_event(
         row = s.execute(text("SELECT is_deleted, summary, description FROM issues")).one()
         assert row.is_deleted and row.summary is None and row.description is None
         assert s.execute(text("SELECT count(*) FROM analyses")).scalar_one() == 0
+
+
+def test_live_progress_is_recorded_during_the_run(
+    client: TestClient, container: Container, settings: Settings, db: Database
+) -> None:
+    """While the workflow runs the analysis row is RUNNING with the current node; afterwards final."""
+    from branchops.application.queries.read_models import live_activity
+
+    seen: dict[str, object] = {}
+
+    def spy(request: Any) -> str | Exception:
+        with db.session() as s:
+            seen["live"] = live_activity(s)
+        return ScriptedProvider()._mock.complete(request).content
+
+    post(client, load_sample("complete_incident"))
+    provider = ScriptedProvider({"ExtractionOutput": [spy]})
+    drain(make_dispatcher(container, settings, provider), db)
+
+    live = seen["live"]
+    assert isinstance(live, dict)
+    (run,) = live["running"]
+    assert run["issue_key"] == "BOPS-101"
+    assert run["current_step"] == "extract"
+    assert run["node_states"]["classify"] == "succeeded"
+    assert run["node_states"]["extract"] == "running"
+    assert run["node_states"]["persist"] == "pending"
+    assert run["worker_id"]
+    lanes = {lane["node"]: lane for lane in live["lanes"]}
+    assert lanes["extract"]["busy"][0]["issue_key"] == "BOPS-101"
+
+    with db.session() as s:
+        after = live_activity(s)
+    assert after["running"] == []
+    assert after["recent"][0]["status"] == "COMPLETED"
+    assert after["recent"][0]["node_states"]["persist"] == "succeeded"
+    assert lanes["classify"]["runs_24h"] >= 1
+
+
+def test_failed_attempt_marks_run_failed_then_retry_completes(
+    client: TestClient, container: Container, settings: Settings, db: Database
+) -> None:
+    post(client, load_sample("complete_incident"))
+    provider = ScriptedProvider({"ClassificationOutput": [unavailable, unavailable]})
+    dispatcher = make_dispatcher(container, settings, provider)
+    dispatcher.run_once()
+    dispatcher._pool.shutdown(wait=True)
+    with db.session() as s:
+        status = s.execute(text("SELECT status FROM analyses")).scalar_one()
+    assert status == "FAILED"
+    drain(make_dispatcher(container, settings, provider), db)
+    with db.session() as s:
+        rows = s.execute(text("SELECT status, current_step FROM analyses")).all()
+    assert [(r.status, r.current_step) for r in rows] == [("COMPLETED", None)]

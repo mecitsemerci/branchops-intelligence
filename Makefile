@@ -6,7 +6,8 @@ SHELL := /bin/bash
 PYTHON        ?= python3.12
 VENV          ?= .venv
 BIN           := $(VENV)/bin
-COMPOSE       ?= docker compose -f deploy/docker/compose.yaml
+LLM_MODE      ?= host
+COMPOSE       ?= docker compose -f deploy/docker/compose.yaml $(if $(wildcard .env),--env-file .env)
 IMAGE         ?= branchops-intelligence:dev
 PROD_IMAGE    ?= registry.bank.internal/branchops/branchops-intelligence:0.1.0
 PROD_BASE     ?= registry.bank.internal/ubi9/python-312:latest
@@ -17,6 +18,18 @@ WORKERS       ?= 1
 TEST_DATABASE_URL ?= postgresql+psycopg://branchops:branchops@localhost:$(POSTGRES_PORT)/branchops_test
 
 export IMAGE
+
+# Model wiring per LLM_MODE: host (Ollama on this machine, GPU/Metal), docker (ollama compose service), mock.
+ifeq ($(LLM_MODE),mock)
+export LLM_PROVIDER := mock
+else ifeq ($(LLM_MODE),docker)
+export LLM_PROVIDER := openai-compatible
+export LLM_BASE_URL := http://ollama:11434/v1
+else
+export LLM_PROVIDER := openai-compatible
+export LLM_BASE_URL := http://host.docker.internal:11434/v1
+endif
+OLLAMA_MODEL  ?= branchops-gemma3:4b
 
 ##@ Help
 .PHONY: help
@@ -68,14 +81,40 @@ test-llm: ## Smoke tests against a real endpoint (needs BRANCHOPS_CONFIG, LLM_* 
 docker-build: ## Build the application image ($(IMAGE)) for local use
 	$(COMPOSE) build migrate
 
+.PHONY: model
+model: ## Prepare the Gemma model for LLM_MODE (host: ollama create; docker: pull inside compose)
+ifeq ($(LLM_MODE),host)
+	@command -v ollama >/dev/null || { echo "ollama not found: install Ollama or use LLM_MODE=docker|mock"; exit 1; }
+	@ollama list | grep -q '^gemma3:4b' || ollama pull gemma3:4b
+	ollama create $(OLLAMA_MODEL) -f deploy/ollama/Modelfile.gemma3
+else ifeq ($(LLM_MODE),docker)
+	$(COMPOSE) --profile ollama up -d --wait ollama
+	$(COMPOSE) --profile ollama run --rm ollama-init
+else
+	@echo "LLM_MODE=mock: no model needed"
+endif
+
 .PHONY: up
-up: ## Build and start postgres, migrate, api, worker(s), dashboard
-	$(COMPOSE) up -d --build --wait --scale worker=$(WORKERS)
+up: model ## Start the stack (LLM_MODE=host|docker|mock, WORKERS=n); simulator posts every 5 min
+	$(COMPOSE) $(if $(filter docker,$(LLM_MODE)),--profile ollama) up -d --build --wait --scale worker=$(WORKERS) \
+	  postgres migrate api worker dashboard simulator $(if $(filter docker,$(LLM_MODE)),ollama)
 	@echo ""
-	@echo "  API        http://localhost:$${API_PORT:-8080}   (health: /health/ready, metrics: /metrics)"
-	@echo "  Dashboard  http://localhost:$${DASHBOARD_PORT:-8090}"
-	@echo "  Postgres   localhost:$(POSTGRES_PORT)  (branchops/branchops)"
-	@echo "  Next:      make seed"
+	@echo "  Live agents  http://localhost:$${DASHBOARD_PORT:-8090}/live"
+	@echo "  Dashboard    http://localhost:$${DASHBOARD_PORT:-8090}"
+	@echo "  API          http://localhost:$${API_PORT:-8080}   (health: /health/ready, metrics: /metrics)"
+	@echo "  Postgres     localhost:$(POSTGRES_PORT)  (branchops/branchops)"
+	@echo "  Model        $(LLM_MODE) · $${LLM_MODEL:-$(OLLAMA_MODEL)} · $(LLM_BASE_URL)"
+	@echo "  Simulator    one random incident every $${SIMULATOR_INTERVAL_SECONDS:-300}s (make sim-once for one now)"
+
+.PHONY: sim-once
+sim-once: ## Post one random simulated incident right now
+	$(COMPOSE) run --rm --no-deps simulator simulate --once --burst 1
+
+.PHONY: sim-stop sim-start
+sim-stop: ## Pause the incident simulator
+	$(COMPOSE) stop simulator
+sim-start: ## Resume the incident simulator
+	$(COMPOSE) start simulator
 
 .PHONY: db
 db: ## Start only PostgreSQL (for running the app or tests from the virtualenv)
@@ -83,11 +122,11 @@ db: ## Start only PostgreSQL (for running the app or tests from the virtualenv)
 
 .PHONY: down
 down: ## Stop the stack (keeps the database volume)
-	$(COMPOSE) down
+	$(COMPOSE) --profile ollama down
 
 .PHONY: clean-docker
-clean-docker: ## Stop the stack and delete the database volume
-	$(COMPOSE) down -v --remove-orphans
+clean-docker: ## Stop the stack and delete the database (and in-docker model) volumes
+	$(COMPOSE) --profile ollama down -v --remove-orphans
 
 .PHONY: restart
 restart: ## Restart api, worker and dashboard
@@ -98,7 +137,7 @@ ps: ## Show service status
 	$(COMPOSE) ps
 
 .PHONY: logs
-logs: ## Follow logs (SERVICE=api|worker|dashboard|migrate|postgres to filter)
+logs: ## Follow logs (SERVICE=api|worker|dashboard|simulator|migrate|postgres to filter)
 	$(COMPOSE) logs -f --tail=100 $(SERVICE)
 
 .PHONY: migrate

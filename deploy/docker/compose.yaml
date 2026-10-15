@@ -1,12 +1,12 @@
-# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard.
+# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard + simulator.
 #
-#   make up        # build the image and start everything
-#   make seed      # send signed sample Jira webhooks
+#   make up                    # Gemma via host Ollama (default), simulator posts an incident every 5 min
+#   make up LLM_MODE=docker    # Gemma in the `ollama` compose service (CPU in Docker)
+#   make up LLM_MODE=mock      # deterministic mock model, no LLM needed
 #   make down
 #
 # Containers run like on OpenShift: arbitrary non-root UID in group 0, read-only root filesystem,
-# writable /tmp only, no capabilities. The model provider defaults to the deterministic mock; see
-# config/docker.yaml and .env.example to point the stack at a real OpenAI-compatible endpoint.
+# writable /tmp only, no capabilities. Model settings: config/docker.yaml and .env.example.
 name: branchops
 
 x-app: &app
@@ -20,8 +20,13 @@ x-app: &app
   env_file:
     - path: ../../.env
       required: false
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   environment: &app-env
     BRANCHOPS_CONFIG: /app/config/branchops.yaml
+    LLM_PROVIDER: ${LLM_PROVIDER:-openai-compatible}
+    LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+    LLM_MODEL: ${LLM_MODEL:-branchops-gemma3:4b}
     JIRA_WEBHOOK_SECRETS: ${JIRA_WEBHOOK_SECRETS:-dev-secret}
     DASHBOARD_STORAGE_SECRET: ${DASHBOARD_STORAGE_SECRET:-local-dev-storage-secret}
   volumes:
@@ -102,5 +107,47 @@ services:
       retries: 5
       start_period: 15s
 
+  # Random Turkish branch incidents posted to the API: a short burst at start, then one every
+  # SIMULATOR_INTERVAL_SECONDS (default 300 = 5 min), sometimes with follow-up comments.
+  simulator:
+    <<: *app
+    command: ["simulate"]
+    environment:
+      <<: *app-env
+      SIMULATOR_API_URL: http://api:8080
+      SIMULATOR_INTERVAL_SECONDS: ${SIMULATOR_INTERVAL_SECONDS:-300}
+      SIMULATOR_INITIAL_BURST: ${SIMULATOR_INITIAL_BURST:-2}
+      SIMULATOR_FOLLOW_UP_PROBABILITY: ${SIMULATOR_FOLLOW_UP_PROBABILITY:-0.35}
+    depends_on:
+      api: {condition: service_healthy}
+
+  # Optional in-Docker model server (profile "ollama", used by `make up LLM_MODE=docker`).
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    profiles: ["ollama"]
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  ollama-init:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    profiles: ["ollama"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ../ollama:/models:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - ollama pull gemma3:4b && ollama create branchops-gemma3:4b -f /models/Modelfile.gemma3
+    depends_on:
+      ollama: {condition: service_healthy}
+    restart: "no"
+
 volumes:
   pgdata:
+  ollama:

@@ -69,6 +69,8 @@ class AnalysisRepository:
             "completed_at": result.completed_at,
             "duration_ms": duration_ms,
             "source_updated_at": result.source_updated_at,
+            "current_step": None,
+            "heartbeat_at": result.completed_at,
         }
         stmt = insert(Analysis).values(**values)
         session.execute(

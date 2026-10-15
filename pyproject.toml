@@ -83,6 +83,7 @@ ignore = [
 "src/branchops/config/settings.py" = ["S105"]  # values are environment-variable NAMES, not secrets
 "src/branchops/infrastructure/llm/mock_provider.py" = ["E501"]  # keyword regex tables
 "src/branchops/application/queries/read_models.py" = ["E501"]  # SQL text
+"src/branchops/simulator/**" = ["S311"]  # synthetic demo data, not security relevant
 
 [tool.mypy]
 python_version = "3.12"

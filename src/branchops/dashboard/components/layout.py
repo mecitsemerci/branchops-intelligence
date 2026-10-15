@@ -16,6 +16,7 @@ from branchops.infrastructure.security.auth import AuthenticationError, Principa
 T = TypeVar("T")
 
 NAV = [
+    ("/live", "Canlı Akış", "sensors"),
     ("/", "Genel Bakış", "dashboard"),
     ("/issues", "Kayıt Gezgini", "search"),
     ("/analytics", "Kalite Analitiği", "insights"),

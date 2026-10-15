@@ -70,14 +70,14 @@ class ExtractionOutput(BaseModel):
 
     @model_validator(mode="after")
     def _consistency(self, info: ValidationInfo) -> ExtractionOutput:
-        problems: list[str] = []
+        """Normalise instead of rejecting: small models often omit quotes, and a repair round-trip for
+        one field would discard the whole extraction. A claimed value without any value becomes
+        MISSING; a value without quotes is kept here and judged by evidence verification later
+        (it survives only if it occurs verbatim in the issue text)."""
         for f in self.fields:
             if f.status in ("PRESENT", "VAGUE") and not (f.value and f.value.strip()):
-                problems.append(f"{f.field}: status {f.status} requires a value")
-            if f.status in ("PRESENT", "VAGUE") and not f.evidence:
-                problems.append(f"{f.field}: status {f.status} requires at least one evidence quote")
-        if problems:
-            raise ValueError("; ".join(problems))
+                f.status = "MISSING"
+                f.value = None
         return self
 
 

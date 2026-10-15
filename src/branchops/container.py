@@ -15,6 +15,7 @@ from branchops.infrastructure.llm.mock_provider import MockModelProvider
 from branchops.infrastructure.llm.openai_compatible import OpenAICompatibleModelProvider
 from branchops.infrastructure.persistence.analysis_repository import DatabaseAnalysisSink
 from branchops.infrastructure.persistence.issue_repository import IssueRepository, SessionBoundHistoryReader
+from branchops.infrastructure.persistence.progress_repository import DatabaseProgressReporter
 from branchops.templates.registry import TemplateRegistry
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class Container:
             sink=DatabaseAnalysisSink(self.db),
             settings=self.settings.workflow,
             checkpointer=checkpointer,
+            progress=DatabaseProgressReporter(self.db),
         )
 
     def close(self) -> None:

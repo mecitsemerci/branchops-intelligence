@@ -67,6 +67,13 @@ class TemplateRegistry:
             tax.setdefault(t.category, set()).update(t.subcategories)
         return {k: sorted(v) for k, v in sorted(tax.items())}
 
+    def category_descriptions(self) -> dict[str, str]:
+        """Category -> description (template name + description), for the classification prompt."""
+        out: dict[str, list[str]] = {}
+        for t in self.latest_published():
+            out.setdefault(t.category, []).append(f"{t.name}: {t.description}".strip(": "))
+        return {k: " / ".join(v) for k, v in sorted(out.items())}
+
     def fallback(self) -> IssueTemplate:
         return next(t for t in self.latest_published() if t.is_fallback)
 

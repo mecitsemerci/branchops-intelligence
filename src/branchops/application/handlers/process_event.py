@@ -179,6 +179,7 @@ class EventProcessor:
             "inbox_event_id": str(item.id),
             "input_hash": input_hash,
             "allow_degraded": item.is_last_attempt,
+            "worker_id": item.lease_owner.rsplit(":", 1)[0],
             "started_at": datetime.now(UTC).isoformat(),
             "snapshot": snapshot.model_dump(mode="json"),
             "steps": [],
