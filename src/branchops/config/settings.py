@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 from branchops.domain.enums import Role
 from branchops.scoring.policies import ScoringPolicy
 
+# Development fallback: stable within one process only (production requires the configured key).
+_PROCESS_PSEUDONYM_KEY = os.urandom(32)
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
@@ -172,6 +174,37 @@ class TicketingSettings(BaseModel):
         return os.environ.get(self.token_env) or None
 
 
+class S3StoreSettings(BaseModel):
+    """Internal S3-compatible object store (MinIO / Ceph RGW); path-style requests, SigV4."""
+
+    endpoint: str | None = None  # e.g. https://minio.storage.svc:9000
+    bucket: str = "branchops-attachments"
+    region: str = "us-east-1"
+    access_key_env: str = "ATTACHMENTS_S3_ACCESS_KEY"
+    secret_key_env: str = "ATTACHMENTS_S3_SECRET_KEY"
+    prefix: str = "attachments/"
+    ca_bundle: str | None = None
+    timeout_seconds: float = 30.0
+
+    def credentials(self) -> tuple[str, str] | None:
+        access, secret = os.environ.get(self.access_key_env), os.environ.get(self.secret_key_env)
+        return (access, secret) if access and secret else None
+
+
+class AttachmentSettings(BaseModel):
+    """Screenshots and logs attached to incidents (never sent to the LLM)."""
+
+    max_bytes: int = Field(default=3 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
+    allowed_types: list[str] = Field(default_factory=lambda: ["image/png", "image/jpeg", "text/plain"])
+    max_per_incident: int = Field(default=5, ge=1, le=50)
+    max_image_pixels: int = Field(default=40_000_000, ge=1_000_000)
+    store: Literal["postgres", "s3"] = "postgres"
+    s3: S3StoreSettings = S3StoreSettings()
+    # Lifetime of the draft_token issued by check_incident_draft (upload before report_incident).
+    draft_token_ttl_minutes: int = Field(default=30, ge=5, le=24 * 60)
+    forward_to_ticketing: bool = True
+
+
 class OwnershipSettings(BaseModel):
     """Screen ownership registry and routing (data is managed in the dashboard under /yonetim)."""
 
@@ -196,6 +229,8 @@ class RetentionSettings(BaseModel):
     on_issue_deleted: Literal["soft_delete", "purge"] = "soft_delete"
     redact_deleted_comments: bool = True
     redact_inbox_payload_after_processing: bool = True
+    # Attachments (and unbound draft uploads) older than this are purged by the worker / CLI.
+    attachments_days: int = Field(default=180, ge=1)
 
 
 class WorkerSettings(BaseModel):
@@ -280,6 +315,12 @@ class SecuritySettings(BaseModel):
     # IdP groups of the dev principal (``auth_mode: dev`` only); used for MCP team resolution.
     dev_groups: list[str] = Field(default_factory=list)
     masking_extra_patterns: list[tuple[str, str]] = Field(default_factory=list)
+    # Key for pseudonymising host-application usernames in app_context (HMAC); required in production.
+    pseudonym_key_env: str = "BRANCHOPS_PSEUDONYM_KEY"
+
+    def pseudonym_key(self) -> bytes:
+        value = os.environ.get(self.pseudonym_key_env)
+        return value.encode() if value else _PROCESS_PSEUDONYM_KEY
 
 
 class NetworkSettings(BaseModel):
@@ -377,6 +418,7 @@ class Settings(BaseModel):
     ticketing: TicketingSettings = TicketingSettings()
     outbox: OutboxSettings = OutboxSettings()
     ownership: OwnershipSettings = OwnershipSettings()
+    attachments: AttachmentSettings = AttachmentSettings()
 
     @model_validator(mode="before")
     @classmethod
@@ -416,6 +458,8 @@ class Settings(BaseModel):
                         f"source {src.id!r}: secrets are not configured "
                         f"(environment variable {src.auth.secrets_env} is empty)"
                     )
+            if self.reporting.enabled and not os.environ.get(self.security.pseudonym_key_env):
+                raise ValueError(f"reporting: {self.security.pseudonym_key_env} must be set in production")
             if self.ticketing.sink == "jira":
                 if not (self.ticketing.base_url or "").startswith("https://"):
                     raise ValueError("ticketing.base_url must use https in production")

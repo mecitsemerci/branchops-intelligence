@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from branchops.application.interfaces.delivery import PermanentDeliveryError, RetryLaterError
@@ -18,10 +19,17 @@ def create_key(incident_key: str) -> str:
     return f"ticket:{incident_key}:create"
 
 
+# attachment id -> (metadata with filename/content_type, bytes), or None when it no longer exists.
+AttachmentLoader = Callable[[str], "tuple[dict[str, Any], bytes] | None"]
+
+
 class TicketingHandler:
-    def __init__(self, db: Database, sink: TicketingSink) -> None:
+    def __init__(
+        self, db: Database, sink: TicketingSink, attachments: AttachmentLoader | None = None
+    ) -> None:
         self._db = db
         self._sink = sink
+        self._attachments = attachments
 
     def _ticket_key(self, incident_key: str) -> str:
         with self._db.session() as s:
@@ -48,4 +56,12 @@ class TicketingHandler:
             key = self._ticket_key(item.incident_key)
             self._sink.add_comment(key, str(p["body"]))
             return {"ticket_key": key}
+        if item.kind == "add_attachment":
+            loaded = self._attachments(str(p["attachment_id"])) if self._attachments else None
+            if loaded is None:
+                raise PermanentDeliveryError("attachment not found (purged?)")
+            meta, data = loaded
+            key = self._ticket_key(item.incident_key)
+            self._sink.add_attachment(key, str(meta["filename"]), str(meta["content_type"]), data)
+            return {"ticket_key": key, "filename": meta["filename"]}
         raise PermanentDeliveryError(f"unknown ticketing operation {item.kind!r}")

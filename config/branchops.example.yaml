@@ -81,6 +81,20 @@ reporting:
   key_prefix: RPT
   default_group_key: IN-APP
 
+# Screenshots / logs attached to in-app reports (never sent to the LLM; purged after retention.attachments_days).
+attachments:
+  max_bytes: 3145728               # 3 MB per file (after decoding); images are re-encoded, metadata removed
+  allowed_types: [image/png, image/jpeg, text/plain]
+  max_per_incident: 5
+  store: postgres                  # postgres (bytea in table attachments) | s3 (internal MinIO / Ceph)
+  s3:
+    endpoint: ${ATTACHMENTS_S3_ENDPOINT:-}   # e.g. https://minio.storage.svc:9000 (outbound URL guard applies)
+    bucket: branchops-attachments
+    access_key_env: ATTACHMENTS_S3_ACCESS_KEY
+    secret_key_env: ATTACHMENTS_S3_SECRET_KEY
+  draft_token_ttl_minutes: 30
+  forward_to_ticketing: true
+
 # Optional: open tickets for reported incidents (drained by the worker from ticketing_outbox).
 ticketing:
   sink: none                       # none | jira
@@ -94,6 +108,7 @@ retention:
   on_issue_deleted: soft_delete    # soft_delete | purge
   redact_deleted_comments: true
   redact_inbox_payload_after_processing: true
+  attachments_days: 180
 
 worker:
   concurrency: 2

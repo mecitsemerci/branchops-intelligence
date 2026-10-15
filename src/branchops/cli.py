@@ -90,28 +90,60 @@ def cmd_worker(args: argparse.Namespace) -> int:
 
 
 def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
-    """Ticketing (and later notification) outboxes are drained by every worker replica (SKIP LOCKED)."""
+    """Outboxes are drained by every worker replica (SKIP LOCKED); attachment retention runs hourly."""
+    from branchops.application.commands.attachments import AttachmentService
+    from branchops.infrastructure.attachments import build_attachment_store
     from branchops.infrastructure.ticketing import build_ticketing_sink
     from branchops.infrastructure.ticketing.handler import TICKETING_OUTBOX, TicketingHandler
+    from branchops.workers.housekeeping import PeriodicTask
     from branchops.workers.outbox import OutboxDrainer
 
     settings = container.settings
-    drainers: list[Any] = []
+    db = container.db
+    attachments = AttachmentService(settings, build_attachment_store(settings))
+
+    def load_attachment(attachment_id: str) -> Any:
+        with db.session() as s:
+            return attachments.load(s, attachment_id)
+
+    def purge() -> dict[str, int]:
+        with db.session() as s:
+            return attachments.purge(s)
+
+    tasks: list[Any] = [PeriodicTask("attachment-retention", purge, 3600.0)]
     sink = build_ticketing_sink(settings)
     if sink is not None:
-        drainers.append(
+        tasks.append(
             OutboxDrainer(
                 "ticketing",
-                container.db,
+                db,
                 TICKETING_OUTBOX,
-                TicketingHandler(container.db, sink),
+                TicketingHandler(db, sink, load_attachment),
                 settings.outbox,
                 owner,
             )
         )
-    for drainer in drainers:
-        drainer.start()
-    return drainers
+    for task in tasks:
+        task.start()
+    return tasks
+
+
+def cmd_attachments(args: argparse.Namespace) -> int:
+    """``branchops attachments purge``: apply ``retention.attachments_days`` now."""
+    from branchops.application.commands.attachments import AttachmentService
+    from branchops.container import Container
+    from branchops.infrastructure.attachments import build_attachment_store
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        service = AttachmentService(settings, build_attachment_store(settings))
+        with container.db.session() as s:
+            result = service.purge(s)
+    finally:
+        container.close()
+    print(json.dumps(result))
+    return 0
 
 
 def cmd_import(args: argparse.Namespace) -> int:
@@ -434,6 +466,9 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--source", default=None, help="only this source (default: all enabled pull sources)")
     poll.add_argument("--once", action="store_true", help="poll every source once and exit")
     poll.set_defaults(func=cmd_poll)
+    att = sub.add_parser("attachments", help="attachment utilities")
+    att.add_argument("attachments_command", choices=["purge"])
+    att.set_defaults(func=cmd_attachments)
     own = sub.add_parser("ownership", help="screen ownership registry utilities")
     own.add_argument("ownership_command", choices=["check"])
     own.add_argument("--days", type=int, default=90, help="window for 'rule matches nothing' warnings")

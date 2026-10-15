@@ -8,17 +8,20 @@ from __future__ import annotations
 
 import uuid
 from typing import Any, Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from branchops.agents.reporting import ReportingAgent
 from branchops.api.dependencies import AppServices, db_session, require, services
+from branchops.application.commands.attachments import AttachmentService
 from branchops.application.commands.ingest_webhook import RequestReanalysis
 from branchops.application.queries.read_models import IssueFilter
 from branchops.domain.entities.incident import incident_key as make_incident_key
 from branchops.domain.entities.incident import is_valid_incident_key, parse_incident_key
 from branchops.domain.enums import Role
+from branchops.infrastructure.attachments import build_attachment_store
 from branchops.infrastructure.persistence.audit import audit
 from branchops.infrastructure.persistence.inbox_repository import InboxRepository
 from branchops.infrastructure.security.auth import Principal
@@ -90,6 +93,52 @@ def reanalyze(
         key, requested_by=principal.username, correlation_id=request.state.correlation_id
     )
     return {"status": "queued", "event_id": event_id}
+
+
+def _attachments(svc: AppServices) -> AttachmentService:
+    return AttachmentService(svc.settings, build_attachment_store(svc.settings))
+
+
+@router.get("/issues/{incident_key:path}/attachments")
+def list_attachments(
+    incident_key: str,
+    svc: AppServices = Depends(services),
+    session: Session = Depends(db_session),
+    _: Principal = Depends(require(Role.VIEWER)),
+) -> list[dict[str, Any]]:
+    """Attachment metadata of an incident (content via ``/api/attachments/{id}``)."""
+    return _attachments(svc).list_for_incident(session, _incident_key(incident_key))
+
+
+@router.get("/attachments/{attachment_id}")
+def download_attachment(
+    attachment_id: str,
+    svc: AppServices = Depends(services),
+    session: Session = Depends(db_session),
+    principal: Principal = Depends(require(Role.VIEWER)),
+) -> Response:
+    """Attachment content (always as a download); every access is audited."""
+    loaded = _attachments(svc).load(session, attachment_id)
+    if loaded is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "attachment not found")
+    meta, data = loaded
+    audit(
+        session,
+        actor=principal.username,
+        action="attachment_downloaded",
+        resource_type="attachment",
+        resource_id=meta["id"],
+        details={"incident_key": meta["incident_key"], "via": "api"},
+    )
+    return Response(
+        content=data,
+        media_type=meta["content_type"],
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(meta['filename'])}",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/issues/{incident_key:path}")

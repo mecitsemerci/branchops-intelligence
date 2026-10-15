@@ -8,6 +8,7 @@ from typing import TypeVar
 
 from sqlalchemy.orm import Session
 
+from branchops.application.commands.attachments import AttachmentService
 from branchops.application.commands.ownership import OwnershipService
 from branchops.application.queries.read_models import ReadModels
 from branchops.config.settings import Settings
@@ -24,6 +25,7 @@ class DashboardContext:
     registry: TemplateRegistry
     read: ReadModels
     ownership: OwnershipService | None = None
+    attachments: AttachmentService | None = None
 
     def query(self, fn: Callable[[Session], T]) -> T:
         with self.db.session() as session:

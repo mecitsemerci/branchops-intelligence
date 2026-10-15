@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -397,3 +397,54 @@ class OwnershipChange(Base):
     before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     correlation_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class IncidentDraftToken(Base):
+    """Short-lived token from check_incident_draft: attachments can be uploaded before the report."""
+
+    __tablename__ = "incident_drafts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    incident_key: Mapped[str | None] = mapped_column(String(200))
+    bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Attachment(Base):
+    """Screenshot / log attached to an incident (or to a draft until the report is submitted)."""
+
+    __tablename__ = "attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    incident_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("incident_drafts.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(200), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage: Mapped[str] = mapped_column(String(20), nullable=False)
+    storage_ref: Mapped[str] = mapped_column(String(300), nullable=False)
+    # Content for the PostgreSQL store (size-capped by settings.attachments.max_bytes); NULL for S3.
+    data: Mapped[bytes | None] = mapped_column(BYTEA)
+    blurred_regions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class IncidentAppContext(Base):
+    """Masked technical context reported by an in-app agent (routing input; never sent to the LLM)."""
+
+    __tablename__ = "incident_app_context"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    security_flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

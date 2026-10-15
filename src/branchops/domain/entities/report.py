@@ -27,6 +27,56 @@ DRAFT_FIELD_MAP: dict[str, str] = {
 }
 
 
+class RequestTrace(BaseModel):
+    """One recent HTTP request of the host application (no bodies, no headers)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    method: str = Field(max_length=10, pattern=r"^[A-Za-z]+$")
+    path: str = Field(max_length=500, description="Path only; query strings are removed server-side.")
+    status: int | None = Field(default=None, ge=0, le=999)
+    duration_ms: int | None = Field(default=None, ge=0, le=3_600_000)
+
+
+class UserContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    branch_code: str | None = Field(default=None, max_length=32)
+    username: str | None = Field(default=None, max_length=200, description="Pseudonymised server-side.")
+    role: str | None = Field(default=None, max_length=100)
+
+
+class DeviceContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    os: str | None = Field(default=None, max_length=100)
+    browser: str | None = Field(default=None, max_length=100)
+    resolution: str | None = Field(default=None, max_length=20, pattern=r"^\d{2,5}x\d{2,5}$")
+
+
+class AppContext(BaseModel):
+    """Technical context gathered automatically by an in-app agent. Stored masked, used for routing and
+    shown to analysts; never sent to the LLM."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    app_id: str | None = Field(default=None, max_length=64, description="Application key, e.g. 'eft'.")
+    screen_id: str | None = Field(default=None, max_length=64, description="Screen key, e.g. 'eft-new'.")
+    screen_title: str | None = Field(default=None, max_length=200)
+    route: str | None = Field(default=None, max_length=500, description="Internal route or URL.")
+    build_version: str | None = Field(default=None, max_length=60)
+    environment: str | None = Field(default=None, max_length=40, description="prod, test, …")
+    error_code: str | None = Field(default=None, max_length=100)
+    error_message: str | None = Field(default=None, max_length=2000)
+    correlation_id: str | None = Field(default=None, max_length=100)
+    trace_id: str | None = Field(default=None, max_length=100)
+    last_requests: list[RequestTrace] = Field(default_factory=list, max_length=20)
+    log_excerpt: str | None = Field(default=None, max_length=4000)
+    user_context: UserContext | None = None
+    device: DeviceContext | None = None
+    occurred_at: datetime | None = None
+
+
 class IncidentDraft(BaseModel):
     """What the reporter knows. Everything except title and description is optional; the server tells the
     client which template fields are still missing (``check_incident_draft``)."""
@@ -58,6 +108,9 @@ class IncidentDraft(BaseModel):
     troubleshooting_steps: str | None = Field(default=None, max_length=4000, description="What was tried.")
     evidence: str | None = Field(
         default=None, max_length=2000, description="References to screenshots, logs, transaction numbers."
+    )
+    app_context: AppContext | None = Field(
+        default=None, description="Technical context from the host application (in-app agents)."
     )
 
     def canonical_values(self) -> dict[str, str]:
@@ -95,3 +148,8 @@ class DraftCheck(BaseModel):
     security_flags: list[str] = Field(
         default_factory=list, description="Prompt-injection patterns found in the text (review triggers)."
     )
+    draft_token: str | None = Field(
+        default=None,
+        description="Short-lived token: upload attachments with it, then pass it to report_incident.",
+    )
+    draft_token_expires_at: datetime | None = None

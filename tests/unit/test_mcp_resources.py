@@ -50,5 +50,6 @@ class TestResourcesAndPrompts:
             "weekly-branch-report",
             "investigate-recurring-error",
             "missing-information-checklist",
+            "report-from-app",
         }
         assert "get_incident_analysis" in text and "jira:OPS-1" in text
