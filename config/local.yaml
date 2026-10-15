@@ -15,3 +15,4 @@ workflow: {checkpointer: postgres}
 worker: {concurrency: 1, poll_interval_seconds: 1, health_port: 8081}
 security: {auth_mode: dev, dev_user: developer, dev_roles: [ADMIN]}
 templates: {directory: templates}
+reporting: {enabled: true}

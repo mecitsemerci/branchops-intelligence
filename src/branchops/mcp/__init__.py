@@ -1,7 +1,8 @@
-"""Read-only MCP server (``branchops mcp``) exposing verified, team-scoped incident data to MCP clients.
+"""MCP server (``branchops mcp``) exposing verified, team-scoped incident data to MCP clients.
 
-The server never calls the LLM and never runs model- or client-written SQL: every tool is a fixed,
-parameterised query from ``application/queries`` with the caller's team scope applied in SQL.
+The server never calls the LLM and never runs model- or client-written SQL: every read tool is a fixed,
+parameterised query from ``application/queries`` with the caller's team scope applied in SQL. The only
+writes are request_reanalysis and the reporting tools, which enqueue inbox / outbox rows.
 """
 
 import importlib

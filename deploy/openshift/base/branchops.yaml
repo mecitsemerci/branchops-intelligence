@@ -69,6 +69,22 @@ sources:
       watch_directory: /data/imports
       timezone: Europe/Istanbul
 
+# Incident reporting through MCP (report_incident / add_incident_update); adds an `mcp_report` source "app".
+reporting:
+  enabled: true
+  source_id: app
+  key_prefix: RPT
+  default_group_key: IN-APP
+
+# Optional: open tickets for reported incidents (drained by the worker from ticketing_outbox).
+ticketing:
+  sink: none                       # none | jira
+  base_url: ${TICKETING_JIRA_URL:-}  # internal Jira, e.g. https://jira.bank.internal
+  token_env: TICKETING_JIRA_TOKEN
+  default_project_key: ${TICKETING_PROJECT:-}
+  issue_type: Incident
+  labels: [branchops-reported]     # exclude from the jira source to avoid re-ingesting the tickets
+
 retention:
   on_issue_deleted: soft_delete    # soft_delete | purge
   redact_deleted_comments: true

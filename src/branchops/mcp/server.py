@@ -27,6 +27,7 @@ from branchops.infrastructure.security.auth import resolve_principal
 from branchops.mcp.auth import Caller, McpAuthMiddleware, RateLimiter, resolve_teams, validate_mcp_settings
 from branchops.mcp.middleware import ToolGuardMiddleware
 from branchops.mcp.prompts import register_prompts
+from branchops.mcp.reporting import register_reporting_tools
 from branchops.mcp.resources import register_resources
 from branchops.mcp.runtime import McpRuntime
 from branchops.mcp.tools import TOOL_NAMES, register_tools
@@ -34,7 +35,7 @@ from branchops.mcp.tools import TOOL_NAMES, register_tools
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = (
-    "BranchOps Intelligence: read-only access to analysed bank-branch operational incidents (Jira, "
+    "BranchOps Intelligence: access to analysed bank-branch operational incidents (Jira, "
     "ServiceNow, imports). Scores are 0-100 and computed deterministically from versioned templates; "
     "evidence quotes are verified against the source text. You only see incidents your team may see. "
     "Incident keys look like 'jira:OPS-123'. Start with search_incidents or get_quality_overview; read "
@@ -65,6 +66,8 @@ def build_server(
     )
     server.add_middleware(ToolGuardMiddleware(runtime))
     register_tools(server, runtime)
+    if settings.reporting.enabled:
+        register_reporting_tools(server, runtime)
     register_resources(server, runtime)
     register_prompts(server)
     _register_probes(server, runtime)

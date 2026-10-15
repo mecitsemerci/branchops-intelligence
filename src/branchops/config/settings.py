@@ -62,7 +62,7 @@ class JiraSettings(BaseModel):
     allowed_projects: list[str] = Field(default_factory=list)
 
 
-SourceType = Literal["jira_webhook", "servicenow_webhook", "csv_import"]
+SourceType = Literal["jira_webhook", "servicenow_webhook", "csv_import", "mcp_report"]
 PUSH_SOURCE_TYPES: frozenset[str] = frozenset({"jira_webhook", "servicenow_webhook"})
 
 
@@ -137,6 +137,50 @@ def _legacy_jira_source(data: dict[str, Any]) -> dict[str, Any]:
         "allowed_groups": list(jira.get("allowed_projects") or []),
         "field_mapping": dict(jira.get("field_mapping") or {}),
     }
+
+
+class ReportingSettings(BaseModel):
+    """Incident reporting through the MCP server (report_incident / add_incident_update).
+
+    When enabled, a source ``source_id`` of type ``mcp_report`` is added automatically (unless configured
+    explicitly); reported incidents are ``<source_id>:<key_prefix>-<yyyymmdd>-<random>``.
+    """
+
+    enabled: bool = False
+    source_id: str = Field(default="app", pattern=r"^[a-z][a-z0-9_-]{0,39}$")
+    key_prefix: str = Field(default="RPT", pattern=r"^[A-Z][A-Z0-9]{0,9}$")
+    # group_key of reports without an application (scopes of MCP teams can restrict by group key).
+    default_group_key: str = "IN-APP"
+    max_description_chars: int = Field(default=8000, ge=500, le=50_000)
+    max_update_chars: int = Field(default=4000, ge=100, le=20_000)
+
+
+class TicketingSettings(BaseModel):
+    """Optional ticket creation for reported incidents (via ``ticketing_outbox``, drained by the worker)."""
+
+    sink: Literal["none", "jira"] = "none"
+    base_url: str | None = None  # internal Jira, e.g. https://jira.bank.internal
+    token_env: str = "TICKETING_JIRA_TOKEN"  # personal access token (Bearer)
+    default_project_key: str | None = None
+    issue_type: str = "Incident"
+    # Tickets carry this label; exclude it (or the project) from the Jira source to avoid re-ingestion loops.
+    labels: list[str] = Field(default_factory=lambda: ["branchops-reported"])
+    timeout_seconds: float = 20.0
+    ca_bundle: str | None = None
+
+    def token(self) -> str | None:
+        return os.environ.get(self.token_env) or None
+
+
+class OutboxSettings(BaseModel):
+    """Drain loops of the transactional outboxes (ticketing, notifications) in the worker process."""
+
+    poll_interval_seconds: float = Field(default=5.0, gt=0)
+    batch_size: int = Field(default=20, ge=1, le=200)
+    lease_seconds: int = Field(default=120, ge=10)
+    max_attempts: int = Field(default=8, ge=1)
+    backoff_base_seconds: float = 30.0
+    backoff_max_seconds: float = 3600.0
 
 
 class RetentionSettings(BaseModel):
@@ -248,6 +292,8 @@ class DashboardSettings(BaseModel):
     host: str = "0.0.0.0"  # noqa: S104 - container port, protected by NetworkPolicy and oauth-proxy
     port: int = 8090
     title: str = "BranchOps Intelligence"
+    # External URL used in links (tickets, notifications), e.g. https://branchops.apps.bank.internal
+    public_url: str | None = None
     storage_secret_env: str = "DASHBOARD_STORAGE_SECRET"
 
 
@@ -318,6 +364,9 @@ class Settings(BaseModel):
     observability: ObservabilitySettings = ObservabilitySettings()
     dashboard: DashboardSettings = DashboardSettings()
     mcp: McpSettings = McpSettings()
+    reporting: ReportingSettings = ReportingSettings()
+    ticketing: TicketingSettings = TicketingSettings()
+    outbox: OutboxSettings = OutboxSettings()
 
     @model_validator(mode="before")
     @classmethod
@@ -329,6 +378,11 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def _source_rules(self) -> Settings:
+        if self.reporting.enabled and self.source(self.reporting.source_id) is None:
+            self.sources.append(SourceSettings(id=self.reporting.source_id, type="mcp_report"))
+        reporting_source = self.source(self.reporting.source_id)
+        if self.reporting.enabled and reporting_source is not None and reporting_source.type != "mcp_report":
+            raise ValueError(f"reporting.source_id {self.reporting.source_id!r} must be an mcp_report source")
         ids = [s.id for s in self.sources]
         if len(ids) != len(set(ids)):
             raise ValueError("source ids must be unique")
@@ -352,6 +406,15 @@ class Settings(BaseModel):
                         f"source {src.id!r}: secrets are not configured "
                         f"(environment variable {src.auth.secrets_env} is empty)"
                     )
+            if self.ticketing.sink == "jira":
+                if not (self.ticketing.base_url or "").startswith("https://"):
+                    raise ValueError("ticketing.base_url must use https in production")
+                if not self.ticketing.token():
+                    raise ValueError(f"ticketing: {self.ticketing.token_env} is empty")
+        if self.ticketing.sink == "jira" and not (
+            self.ticketing.base_url and self.ticketing.default_project_key
+        ):
+            raise ValueError("ticketing.sink 'jira' requires base_url and default_project_key")
         return self
 
     def enabled_sources(self) -> list[SourceSettings]:

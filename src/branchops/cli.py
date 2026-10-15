@@ -10,6 +10,7 @@ import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from branchops.config.settings import Settings, load_settings
 from branchops.infrastructure.observability.logging import configure_logging
@@ -78,11 +79,39 @@ def cmd_worker(args: argparse.Namespace) -> int:
     register_gauge("branchops_inbox_oldest_pending_seconds", "Age of the oldest pending event", oldest)
     start_health_server(dispatcher, settings.worker.health_port, stale_after_seconds=120)
     dispatcher.install_signal_handlers()
+    drainers = start_outbox_drainers(container, owner)
     try:
         dispatcher.run_forever()
     finally:
+        for drainer in drainers:
+            drainer.stop()
         container.close()
     return 0
+
+
+def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
+    """Ticketing (and later notification) outboxes are drained by every worker replica (SKIP LOCKED)."""
+    from branchops.infrastructure.ticketing import build_ticketing_sink
+    from branchops.infrastructure.ticketing.handler import TICKETING_OUTBOX, TicketingHandler
+    from branchops.workers.outbox import OutboxDrainer
+
+    settings = container.settings
+    drainers: list[Any] = []
+    sink = build_ticketing_sink(settings)
+    if sink is not None:
+        drainers.append(
+            OutboxDrainer(
+                "ticketing",
+                container.db,
+                TICKETING_OUTBOX,
+                TicketingHandler(container.db, sink),
+                settings.outbox,
+                owner,
+            )
+        )
+    for drainer in drainers:
+        drainer.start()
+    return drainers
 
 
 def cmd_import(args: argparse.Namespace) -> int:

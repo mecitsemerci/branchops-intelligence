@@ -1,6 +1,7 @@
 # MCP server
 
-`branchops mcp` is a read-only [Model Context Protocol](https://modelcontextprotocol.io) server. Other teams
+`branchops mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server. It is read-only except
+for re-analysis requests and, when `reporting.enabled`, incident reporting. Other teams
 connect their own MCP clients (Claude Desktop / Claude Code, Cursor, internal chatbots) and query analysed
 incident data: search, incident details, analyses, similar and recurring incidents, quality figures and
 templates.
@@ -145,7 +146,7 @@ with `mcp.teams`.
 
 ## Tool catalogue
 
-All tools are read-only except `request_reanalysis`. Outputs are typed (JSON schema published in
+All tools are read-only except `request_reanalysis` and the reporting tools below. Outputs are typed (JSON schema published in
 `tools/list`) and bounded by page size, result limits and `max_text_chars`. Any value that was cut ends with
 `…[truncated: N of M chars]`, and its path is listed in the response's `truncated` field. Scores are 0–100 and
 computed deterministically by BranchOps; clients should report them, not recompute them.
@@ -163,6 +164,27 @@ computed deterministically by BranchOps; clients should report them, not recompu
 | `get_template` | `template_id`, `version?` | fields with weights, required/conditional rules, validation, rubric, recommendation |
 | `get_inbox_health` | – | pending / processing / dead-letter counts, oldest pending age (s), active workers |
 | `request_reanalysis` | `incident_key`, `reason` (5–500 chars) | `{status: queued, event_id}`; enqueues a `MANUAL_REANALYSIS` inbox event |
+
+### Reporting tools (`reporting.enabled: true`)
+
+| Tool | Parameters | Returns |
+|---|---|---|
+| `check_incident_draft` | `draft` (title, description, branch_code?, application?, error_details?, occurred_at?, …) | the template the incident would be scored with, missing required/optional fields with what to ask, invalid values, prompt-injection flags. Deterministic, nothing is stored. |
+| `report_incident` | `draft`, `idempotency_key?` | `incident_key` (`app:RPT-…`), `status` (`accepted` / `duplicate`), `ticketing` (`queued` / `disabled`), the draft check |
+| `add_incident_update` | `incident_key`, `text` (3–4000 chars) | `comment_id`; the incident is re-analysed |
+
+* **Reports.** A report is an ordinary incident of the `mcp_report` source (`reporting.source_id`, default
+  `app`). The command writes the canonical event to the inbox in one transaction, together with a ticket
+  request when a ticketing sink is configured. The worker masks, merges and analyses it like any other
+  source; the reporter is the authenticated user.
+* **Idempotency.** Repeating `report_incident` with the same `idempotency_key` (per user) returns the same
+  incident key.
+* **Updates.** Only incidents reported through BranchOps can be updated, and only by callers whose scope
+  includes them (or by the reporter while the report is still queued).
+* **Ticketing** (`ticketing.sink: jira`). The worker drains `ticketing_outbox` and, through the internal Jira
+  REST API, creates a ticket in `default_project_key` and adds updates as comments. Only masked text leaves
+  BranchOps. Tickets carry the `branchops-reported` label: exclude that label or the project from the Jira
+  source so that the tickets are not ingested back.
 
 Examples (arguments as a client sends them):
 

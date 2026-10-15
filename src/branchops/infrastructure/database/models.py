@@ -264,3 +264,32 @@ class AuditLog(Base):
     resource_id: Mapped[str | None] = mapped_column(String(200))
     correlation_id: Mapped[str | None] = mapped_column(String(64))
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class OutboxMixin:
+    """Columns shared by the transactional outboxes (claimed with SKIP LOCKED + lease, like the inbox)."""
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    idempotency_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
+    incident_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(120))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TicketingOutbox(OutboxMixin, Base):
+    """Ticket operations for reported incidents (create_ticket, add_comment, add_attachment)."""
+
+    __tablename__ = "ticketing_outbox"
+    __table_args__ = (Index("ix_ticketing_outbox_claim", "status", "available_at"),)
