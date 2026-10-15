@@ -48,7 +48,7 @@ def _last_outputs(a: Analysis | None) -> dict[str, str]:
     """Short human-readable result of each node for the most recently finished analysis."""
     if a is None:
         return {}
-    key = a.issue_key
+    key = a.incident_key
     out: dict[str, str] = {}
     cls = a.classification or {}
     if cls:

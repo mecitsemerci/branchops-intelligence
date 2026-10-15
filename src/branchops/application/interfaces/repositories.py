@@ -11,7 +11,7 @@ from branchops.domain.entities.analysis import AnalysisResult, StepRecord
 
 @dataclass(frozen=True)
 class CandidateIssue:
-    issue_key: str
+    incident_key: str
     summary: str | None
     description_excerpt: str | None
     category: str | None
@@ -21,19 +21,22 @@ class CandidateIssue:
     error_signature: str | None
     created_at: datetime | None
     text_rank: float
+    source: str = "jira"
 
 
 class HistoricalIssueReader(Protocol):
     def find_candidates(
         self,
-        issue_key: str,
+        incident_key: str,
         query_text: str,
         error_signature: str | None,
         lookback_days: int,
         limit: int,
     ) -> list[CandidateIssue]: ...
 
-    def count_signature_occurrences(self, issue_key: str, error_signature: str, window_days: int) -> int: ...
+    def count_signature_occurrences(
+        self, incident_key: str, error_signature: str, window_days: int
+    ) -> int: ...
 
 
 class AnalysisSink(Protocol):
@@ -43,7 +46,7 @@ class AnalysisSink(Protocol):
 @dataclass(frozen=True)
 class RunInfo:
     analysis_id: str
-    issue_key: str
+    incident_key: str
     correlation_id: str
     inbox_event_id: str | None
     input_hash: str

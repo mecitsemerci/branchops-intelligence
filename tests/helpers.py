@@ -23,6 +23,7 @@ from branchops.infrastructure.llm.mock_provider import MockModelProvider
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples" / "jira"
+SAMPLES_ROOT = ROOT / "samples"
 TEMPLATES = ROOT / "templates"
 
 Responder = Callable[[CompletionRequest], str | Exception]
@@ -43,7 +44,10 @@ def make_settings(**overrides: Any) -> Settings:
         "worker": {"backoff_base_seconds": 0.01, "backoff_max_seconds": 0.05, "max_attempts": 3},
     }
     for key, value in overrides.items():
-        data.setdefault(key, {}).update(value)
+        if isinstance(value, list):  # e.g. sources=[...]
+            data[key] = value
+        else:
+            data.setdefault(key, {}).update(value)
     return Settings.model_validate(data)
 
 
@@ -112,11 +116,11 @@ class InMemoryHistory:
         self.signature_count = signature_count
 
     def find_candidates(
-        self, issue_key: str, query_text: str, error_signature: str | None, lookback_days: int, limit: int
+        self, incident_key: str, query_text: str, error_signature: str | None, lookback_days: int, limit: int
     ) -> list[CandidateIssue]:
-        return [c for c in self.candidates if c.issue_key != issue_key][:limit]
+        return [c for c in self.candidates if c.incident_key != incident_key][:limit]
 
-    def count_signature_occurrences(self, issue_key: str, error_signature: str, window_days: int) -> int:
+    def count_signature_occurrences(self, incident_key: str, error_signature: str, window_days: int) -> int:
         return self.signature_count
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, TypeVar
+from urllib.parse import quote
 
 from fastapi import Request
 from nicegui import run, ui
@@ -94,3 +95,8 @@ def score_color(score: float | None, threshold: float) -> str:
 def status_badge(status: str | None) -> None:
     if status:
         ui.badge(status, color=STATUS_COLORS.get(status, "grey"))
+
+
+def issue_url(incident_key: str) -> str:
+    """Dashboard URL of an incident (keys may contain "/" and ":", e.g. ``csv:2026-10/row-17``)."""
+    return "/issues/" + quote(incident_key, safe=":/@")

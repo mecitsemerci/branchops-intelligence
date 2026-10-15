@@ -1,6 +1,7 @@
-"""Timestamp-guarded merge of webhook events into the best-known issue snapshot.
+"""Timestamp-guarded merge of source events into the best-known incident snapshot.
 
-Jira does not guarantee delivery order and update webhooks may carry only part of the issue. The merge
+Sources (Jira webhooks in particular) do not guarantee delivery order and update events may carry only
+part of the record. The merge
 therefore follows three rules:
 
 1. An attribute is only overwritten by an event whose source timestamp is *not older* than the
@@ -16,12 +17,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from branchops.domain.entities.jira import JiraComment, JiraIssueSnapshot, NormalizedJiraEvent
-from branchops.domain.enums import JiraEventType
+from branchops.domain.entities.incident import IncidentComment, IncidentEvent, IncidentSnapshot
+from branchops.domain.enums import IncidentEventType
 
 SNAPSHOT_ATTRIBUTES: tuple[str, ...] = (
-    "issue_id",
-    "project_key",
+    "external_id",
+    "group_key",
     "summary",
     "description",
     "status",
@@ -41,13 +42,13 @@ CONTENT_ATTRIBUTES: frozenset[str] = frozenset(
 
 @dataclass
 class MergeOutcome:
-    snapshot: JiraIssueSnapshot
+    snapshot: IncidentSnapshot
     content_changed: bool = False
     applied: list[str] = field(default_factory=list)
     ignored_stale: list[str] = field(default_factory=list)
 
 
-def _event_version(event: NormalizedJiraEvent) -> datetime | None:
+def _event_version(event: IncidentEvent) -> datetime | None:
     return event.source_updated_at or event.event_timestamp
 
 
@@ -64,20 +65,26 @@ def _is_empty(value: Any) -> bool:
 
 
 def merge_event(
-    snapshot: JiraIssueSnapshot | None,
-    event: NormalizedJiraEvent,
+    snapshot: IncidentSnapshot | None,
+    event: IncidentEvent,
     *,
     redact_deleted_comments: bool = True,
 ) -> MergeOutcome:
-    if event.issue_key is None:
-        raise ValueError("cannot merge an event without issue key")
-    base = snapshot.model_copy(deep=True) if snapshot else JiraIssueSnapshot(issue_key=event.issue_key)
+    if event.external_key is None:
+        raise ValueError("cannot merge an event without external key")
+    if snapshot is not None and snapshot.incident_key != event.incident_key:
+        raise ValueError(f"event {event.incident_key} cannot be merged into {snapshot.incident_key}")
+    base = (
+        snapshot.model_copy(deep=True)
+        if snapshot
+        else IncidentSnapshot(source=event.source, external_key=event.external_key)
+    )
     outcome = MergeOutcome(snapshot=base)
     version = _event_version(event)
     version_iso = version.isoformat() if version else None
     explicitly_changed = set(event.changed_fields)
 
-    if event.event_type == JiraEventType.ISSUE_DELETED:
+    if event.event_type == IncidentEventType.RECORD_DELETED:
         if not base.deleted:
             base.deleted = True
             outcome.content_changed = True
@@ -89,9 +96,9 @@ def merge_event(
         return outcome
 
     for attr in SNAPSHOT_ATTRIBUTES:
-        if attr not in event.issue_fields:
+        if attr not in event.fields:
             continue
-        new_value = event.issue_fields[attr]
+        new_value = event.fields[attr]
         current = getattr(base, attr)
         if _is_empty(new_value) and not _is_empty(current) and attr not in explicitly_changed:
             continue
@@ -125,10 +132,10 @@ def merge_event(
         if version_iso:
             base.field_versions[key] = version_iso
 
-    comments: list[JiraComment] = list(event.issue_fields.get("comments") or [])
+    comments: list[IncidentComment] = list(event.fields.get("comments") or [])
     if event.comment is not None:
         comment = event.comment
-        if event.event_type == JiraEventType.COMMENT_DELETED:
+        if event.event_type == IncidentEventType.COMMENT_DELETED:
             comment = comment.model_copy(update={"deleted": True})
         comments.append(comment)
     for comment in comments:
@@ -141,7 +148,7 @@ def merge_event(
     return outcome
 
 
-def _merge_comment(snapshot: JiraIssueSnapshot, incoming: JiraComment, *, redact_deleted: bool) -> bool:
+def _merge_comment(snapshot: IncidentSnapshot, incoming: IncidentComment, *, redact_deleted: bool) -> bool:
     for idx, existing in enumerate(snapshot.comments):
         if existing.comment_id != incoming.comment_id:
             continue

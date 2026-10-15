@@ -1,4 +1,4 @@
-"""Jira webhook authentication.
+"""Webhook authentication for push sources (Jira, ServiceNow, ...).
 
 Supported mechanisms (configurable, several secrets allowed for rotation):
 
@@ -18,11 +18,28 @@ import hashlib
 import hmac
 import ipaddress
 from collections.abc import Mapping
+from typing import Protocol
 
-from branchops.config.settings import WebhookSettings
+from branchops.application.interfaces.source_adapter import SourceAuthError
 
 
-class WebhookAuthError(Exception):
+class WebhookAuthConfig(Protocol):
+    """Satisfied by ``SourceAuthSettings`` and the legacy ``WebhookSettings``."""
+
+    @property
+    def auth_mode(self) -> str: ...
+
+    @property
+    def token_header(self) -> str: ...
+
+    @property
+    def allow_query_token(self) -> bool: ...
+
+    @property
+    def allowed_source_cidrs(self) -> list[str]: ...
+
+
+class WebhookAuthError(SourceAuthError):
     pass
 
 
@@ -55,7 +72,7 @@ def authenticate_webhook(
     headers: Mapping[str, str],
     query: Mapping[str, str],
     client_host: str | None,
-    settings: WebhookSettings,
+    settings: WebhookAuthConfig,
     secrets: list[str],
     query_tokens: list[str] | None = None,
 ) -> str:
@@ -85,5 +102,5 @@ def authenticate_webhook(
 
 
 def sign_body(body: bytes, secret: str) -> str:
-    """Helper for tests and for operators verifying their Jira configuration."""
+    """Helper for tests and for operators verifying their webhook configuration."""
     return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()

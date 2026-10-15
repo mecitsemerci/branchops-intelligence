@@ -6,20 +6,27 @@ import uuid
 import pytest
 from sqlalchemy import text
 
-from branchops.application.commands.ingest_webhook import IngestJiraWebhook, IngestOutcome
+from branchops.application.commands.ingest_webhook import IngestIncidentEvent, IngestOutcome
+from branchops.config.settings import Settings
 from branchops.domain.enums import InboxStatus
 from branchops.infrastructure.database.session import Database
-from branchops.infrastructure.jira.adapter import JiraWebhookAdapter
 from branchops.infrastructure.persistence.inbox_repository import InboxRepository
+from branchops.infrastructure.sources import build_source_registry
 from tests.helpers import load_sample, make_settings
 
 pytestmark = pytest.mark.postgres
 SETTINGS = make_settings()
 
 
+def command(db: Database, settings: Settings = SETTINGS) -> IngestIncidentEvent:
+    return IngestIncidentEvent(db, settings, build_source_registry(settings))
+
+
 def ingest(db: Database, sample: str, delivery_id: str | None = None) -> tuple[IngestOutcome, str | None]:
-    cmd = IngestJiraWebhook(db, SETTINGS, JiraWebhookAdapter(SETTINGS.jira.field_mapping))
-    result = cmd.execute(load_sample(sample), correlation_id=uuid.uuid4().hex, delivery_id=delivery_id)
+    headers = {"X-Atlassian-Webhook-Identifier": delivery_id} if delivery_id else {}
+    result = command(db).execute(
+        "jira", load_sample(sample), correlation_id=uuid.uuid4().hex, headers=headers
+    )
     return result.outcome, result.event_id
 
 
@@ -38,15 +45,10 @@ def test_duplicate_webhook_is_idempotent(db: Database) -> None:
 
 def test_project_allowlist_and_unsupported(db: Database) -> None:
     restricted = make_settings(jira={"allowed_projects": ["OTHER"]})
-    cmd = IngestJiraWebhook(db, restricted, JiraWebhookAdapter())
-    assert (
-        cmd.execute(load_sample("complete_incident"), correlation_id="c" * 8).outcome is IngestOutcome.IGNORED
-    )
-    cmd = IngestJiraWebhook(db, SETTINGS, JiraWebhookAdapter())
-    assert (
-        cmd.execute({"webhookEvent": "board_created"}, correlation_id="c" * 8).outcome
-        is IngestOutcome.IGNORED
-    )
+    result = command(db, restricted).execute("jira", load_sample("complete_incident"), correlation_id="c" * 8)
+    assert result.outcome is IngestOutcome.IGNORED
+    result = command(db).execute("jira", {"webhookEvent": "board_created"}, correlation_id="c" * 8)
+    assert result.outcome is IngestOutcome.IGNORED
 
 
 def test_concurrent_claims_never_overlap(db: Database) -> None:

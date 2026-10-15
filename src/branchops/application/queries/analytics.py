@@ -53,15 +53,16 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
         text(
             """
                 WITH ranked AS (
-                    SELECT issue_key, quality_score, completeness_score, started_at,
-                           row_number() OVER (PARTITION BY issue_key ORDER BY started_at) AS first_rn,
-                           row_number() OVER (PARTITION BY issue_key ORDER BY started_at DESC) AS last_rn
+                    SELECT incident_key, quality_score, completeness_score, started_at,
+                           row_number() OVER (PARTITION BY incident_key ORDER BY started_at) AS first_rn,
+                           row_number() OVER (PARTITION BY incident_key ORDER BY started_at DESC) AS last_rn
                     FROM analyses WHERE quality_score IS NOT NULL
                 )
-                SELECT f.issue_key, f.quality_score AS first_quality, l.quality_score AS last_quality,
+                SELECT f.incident_key, i.source, i.external_key,
+                       f.quality_score AS first_quality, l.quality_score AS last_quality,
                        f.completeness_score AS first_completeness, l.completeness_score AS last_completeness
-                FROM ranked f JOIN ranked l ON l.issue_key = f.issue_key AND l.last_rn = 1
-                JOIN issues i ON i.issue_key = f.issue_key AND NOT i.is_deleted
+                FROM ranked f JOIN ranked l ON l.incident_key = f.incident_key AND l.last_rn = 1
+                JOIN issues i ON i.incident_key = f.incident_key AND NOT i.is_deleted
                 WHERE f.first_rn = 1 AND l.started_at > f.started_at
                   AND l.started_at >= now() - make_interval(days => :days)
                 ORDER BY (l.quality_score - f.quality_score) DESC LIMIT 20
@@ -75,7 +76,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                 SELECT error_signature, count(*) AS n, min(coalesce(source_created_at, created_at)) AS first_seen,
                        max(coalesce(source_created_at, created_at)) AS last_seen,
                        count(DISTINCT branch_code) AS branches,
-                       array_agg(issue_key ORDER BY issue_key) AS issue_keys
+                       count(DISTINCT source) AS sources,
+                       array_agg(incident_key ORDER BY incident_key) AS incident_keys,
+                       array_agg(external_key ORDER BY incident_key) AS issue_keys
                 FROM issues
                 WHERE NOT is_deleted AND error_signature IS NOT NULL
                   AND coalesce(source_created_at, created_at) >= now() - make_interval(days => :days)
@@ -107,7 +110,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
         "most_missing_fields": [{"field": r.field, "count": int(r.n)} for r in missing],
         "improvements": [
             {
-                "issue_key": r.issue_key,
+                "incident_key": r.incident_key,
+                "source": r.source,
+                "issue_key": r.external_key,  # deprecated: use incident_key
                 "first_quality": _r(r.first_quality),
                 "last_quality": _r(r.last_quality),
                 "quality_delta": _r((r.last_quality or 0) - (r.first_quality or 0)),
@@ -123,7 +128,9 @@ def quality_analytics(s: Session, *, days: int = 90, low_quality_threshold: floa
                 "branches": int(r.branches),
                 "first_seen": r.first_seen.isoformat() if r.first_seen else None,
                 "last_seen": r.last_seen.isoformat() if r.last_seen else None,
-                "issue_keys": list(r.issue_keys)[:20],
+                "sources": int(r.sources),
+                "incident_keys": list(r.incident_keys)[:20],
+                "issue_keys": list(r.issue_keys)[:20],  # deprecated: use incident_keys
             }
             for r in recurring
         ],

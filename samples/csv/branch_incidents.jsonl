@@ -1,0 +1,3 @@
+{"Konu": "Mobil onay bildirimi gelmiyor", "Açıklama": "Şube onay uygulamasında müdür onayı bekleyen işlemler için mobil bildirim gelmiyor. Uygulama sürümü 1.8.0, sorun 15.10.2026 sabahından beri devam ediyor.", "Sube Kodu": "1234", "Uygulama": "Şube Onay", "Durum": "Açık", "Öncelik": "Orta", "Oluşturma": "15.10.2026 09:40"}
+{"Konu": "Döviz kuru ekranında eski kur gösteriliyor", "Açıklama": "Döviz İşlemleri ekranında kurlar 08:30'dan sonra güncellenmiyor. Hata kodu yok, ekran yenilemesi denendi.", "Sube Kodu": "2201", "Uygulama": "Döviz İşlemleri", "Durum": "Açık", "Öncelik": "Yüksek", "Oluşturma": "2026-10-15T10:05:00+03:00"}
+{"Konu": "Yavaşlık", "Açıklama": "Her şey çok yavaş.", "Durum": "Açık"}

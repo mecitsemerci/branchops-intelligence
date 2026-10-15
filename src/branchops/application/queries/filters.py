@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-SortField = Literal["updated", "quality", "completeness", "issue_key"]
+SortField = Literal["updated", "quality", "completeness", "incident_key", "issue_key"]
 
 
 @dataclass
 class IssueFilter:
     search: str | None = None
+    source: str | None = None
     category: str | None = None
     branch_code: str | None = None
     application: str | None = None

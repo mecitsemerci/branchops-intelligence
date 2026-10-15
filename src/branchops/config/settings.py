@@ -38,6 +38,9 @@ class DatabaseSettings(BaseModel):
 
 
 class WebhookSettings(BaseModel):
+    """HTTP ingestion limits. The auth fields are the legacy (pre-``sources``) Jira webhook settings: they are
+    still read and translated into the ``jira`` source when the configuration has no ``sources`` list."""
+
     auth_mode: Literal["hmac", "token", "hmac_or_token"] = "hmac_or_token"
     # Comma-separated list of active secrets (supports rotation).
     secrets_env: str = "JIRA_WEBHOOK_SECRETS"
@@ -51,10 +54,89 @@ class WebhookSettings(BaseModel):
 
 
 class JiraSettings(BaseModel):
+    """Deprecated single-source section; translated into ``sources: [{id: jira, ...}]``."""
+
     # canonical field name -> Jira custom field id
     field_mapping: dict[str, str] = Field(default_factory=dict)
     # Empty list = accept all projects.
     allowed_projects: list[str] = Field(default_factory=list)
+
+
+SourceType = Literal["jira_webhook", "servicenow_webhook", "csv_import"]
+PUSH_SOURCE_TYPES: frozenset[str] = frozenset({"jira_webhook", "servicenow_webhook"})
+
+
+class SourceAuthSettings(BaseModel):
+    """Authentication of a push source (see ``infrastructure/security/webhook_auth.py``)."""
+
+    mode: Literal["hmac", "token", "hmac_or_token"] = "hmac_or_token"
+    # Comma-separated list of active secrets (supports rotation).
+    secrets_env: str = "JIRA_WEBHOOK_SECRETS"
+    token_header: str = "X-BranchOps-Webhook-Token"
+    allow_query_token: bool = False
+    query_token_secrets_env: str = "JIRA_WEBHOOK_QUERY_TOKENS"
+    allowed_source_cidrs: list[str] = Field(default_factory=list)
+
+    @property
+    def auth_mode(self) -> str:
+        return self.mode
+
+    def secrets(self) -> list[str]:
+        return _env_list(self.secrets_env)
+
+    def query_tokens(self) -> list[str]:
+        return _env_list(self.query_token_secrets_env)
+
+
+class SourceSettings(BaseModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,39}$")
+    type: SourceType
+    enabled: bool = True
+    description: str | None = None
+    # Push sources only.
+    auth: SourceAuthSettings | None = None
+    # Jira project keys / ServiceNow assignment groups / mailboxes. Empty list = accept all.
+    allowed_groups: list[str] = Field(default_factory=list)
+    # canonical field name -> source field (Jira custom field id, ServiceNow column, CSV header).
+    field_mapping: dict[str, str] = Field(default_factory=dict)
+    # Pull sources only: how often ``branchops poll`` calls the adapter.
+    poll_interval_seconds: float = Field(default=300.0, ge=5)
+    # Adapter-specific options (e.g. CSV ``id_column``, ``watch_directory``, ``delimiter``).
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_push(self) -> bool:
+        return self.type in PUSH_SOURCE_TYPES
+
+
+def _legacy_jira_source(data: dict[str, Any]) -> dict[str, Any]:
+    """Build the ``jira`` source from the pre-multi-source ``jira:`` and ``webhook:`` sections."""
+    jira = data.get("jira") or {}
+    webhook = data.get("webhook") or {}
+    if not isinstance(jira, dict) or not isinstance(webhook, dict):
+        raise ValueError("jira/webhook sections must be mappings")
+    auth = {
+        "mode": webhook.get("auth_mode", "hmac_or_token"),
+        **{
+            k: webhook[k]
+            for k in (
+                "secrets_env",
+                "token_header",
+                "allow_query_token",
+                "query_token_secrets_env",
+                "allowed_source_cidrs",
+            )
+            if k in webhook
+        },
+    }
+    return {
+        "id": "jira",
+        "type": "jira_webhook",
+        "enabled": True,
+        "auth": auth,
+        "allowed_groups": list(jira.get("allowed_projects") or []),
+        "field_mapping": dict(jira.get("field_mapping") or {}),
+    }
 
 
 class RetentionSettings(BaseModel):
@@ -120,7 +202,7 @@ class WorkflowSettings(BaseModel):
     node_timeout_seconds: float = 300.0
     max_repair_attempts: int = Field(default=1, ge=0, le=3)
     max_input_chars: int = 24_000
-    prompt_version: str = "2026.10-2"
+    prompt_version: str = "2026.10-3"
     similarity: SimilaritySettings = SimilaritySettings()
 
 
@@ -177,7 +259,8 @@ class Settings(BaseModel):
     api: ApiSettings = ApiSettings()
     database: DatabaseSettings = DatabaseSettings()
     webhook: WebhookSettings = WebhookSettings()
-    jira: JiraSettings = JiraSettings()
+    jira: JiraSettings = JiraSettings()  # deprecated: translated into ``sources``
+    sources: list[SourceSettings] = Field(default_factory=list)
     retention: RetentionSettings = RetentionSettings()
     worker: WorkerSettings = WorkerSettings()
     llm: LLMSettings = LLMSettings()
@@ -189,6 +272,24 @@ class Settings(BaseModel):
     observability: ObservabilitySettings = ObservabilitySettings()
     dashboard: DashboardSettings = DashboardSettings()
 
+    @model_validator(mode="before")
+    @classmethod
+    def _translate_legacy_sources(cls, data: Any) -> Any:
+        """An empty/absent ``sources`` list means "the single Jira source of earlier releases"."""
+        if not isinstance(data, dict) or data.get("sources"):
+            return data
+        return {**data, "sources": [_legacy_jira_source(data)]}
+
+    @model_validator(mode="after")
+    def _source_rules(self) -> Settings:
+        ids = [s.id for s in self.sources]
+        if len(ids) != len(set(ids)):
+            raise ValueError("source ids must be unique")
+        for src in self.sources:
+            if src.is_push and src.auth is None:
+                src.auth = SourceAuthSettings()
+        return self
+
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         if self.app.environment == "production":
@@ -198,7 +299,19 @@ class Settings(BaseModel):
                 raise ValueError("llm.provider 'mock' is not allowed in production")
             if self.llm.base_url and not self.llm.base_url.startswith("https://"):
                 raise ValueError("llm.base_url must use https in production")
+            for src in self.enabled_sources():
+                if src.is_push and src.auth is not None and not src.auth.secrets():
+                    raise ValueError(
+                        f"source {src.id!r}: secrets are not configured "
+                        f"(environment variable {src.auth.secrets_env} is empty)"
+                    )
         return self
+
+    def enabled_sources(self) -> list[SourceSettings]:
+        return [s for s in self.sources if s.enabled]
+
+    def source(self, source_id: str) -> SourceSettings | None:
+        return next((s for s in self.sources if s.id == source_id), None)
 
     def webhook_secrets(self) -> list[str]:
         return _env_list(self.webhook.secrets_env)

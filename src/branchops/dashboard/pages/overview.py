@@ -53,6 +53,10 @@ def register(ctx: DashboardContext) -> None:
                         kpi("Ort. kalite", ov.avg_quality, color=score_color(ov.avg_quality, threshold))
                         kpi(f"Düşük kalite (<{threshold:g})", ov.low_quality_issues, color="text-red-600")
                         kpi("İnceleme bekleyen", ov.needs_review, color="text-orange-600")
+                    if len(ov.source_distribution) > 1:
+                        with ui.row().classes("gap-4 flex-wrap"):
+                            for src in ov.source_distribution:
+                                kpi(f"Kaynak: {src['source']}", src["count"], color="text-slate-600")
                     with ui.row().classes("w-full gap-4 flex-nowrap"):
                         with ui.card().classes("w-2/3"):
                             ui.label("Kayıt eğilimi").classes("font-semibold")

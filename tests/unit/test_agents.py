@@ -234,7 +234,7 @@ class TestExtraction:
 
 def _candidate(key: str, **kw: object) -> CandidateIssue:
     base: dict[str, object] = {
-        "issue_key": key,
+        "incident_key": key,
         "summary": "EFT hatası",
         "description_excerpt": "",
         "category": "TRANSACTION",
@@ -251,7 +251,7 @@ def _candidate(key: str, **kw: object) -> CandidateIssue:
 
 class TestSimilarity:
     current = IssueFingerprint(
-        issue_key="BOPS-2",
+        incident_key="BOPS-2",
         summary="EFT",
         error_details="EFT-4012",
         category="TRANSACTION",
@@ -277,19 +277,19 @@ class TestSimilarity:
             ),
         ]
         short = shortlist(self.current, cands, min_rank=0.01, top_n=5, duplicate_window=timedelta(hours=72))
-        assert [s.issue_key for s in short] == ["A-1", "A-2"]
+        assert [s.incident_key for s in short] == ["A-1", "A-2"]
         assert passes_duplicate_gate(short[0].deterministic_signals)
         assert not passes_duplicate_gate(short[1].deterministic_signals)
 
     def test_model_duplicate_verdict_downgraded_without_gate(self) -> None:
         cands = [_candidate("A-2", branch_code="9999")]
         short = shortlist(self.current, cands, min_rank=0.0, top_n=5, duplicate_window=timedelta(hours=72))
-        out = json.dumps({"verdicts": [{"issue_key": "A-2", "relationship": "DUPLICATE_CANDIDATE"}]})
+        out = json.dumps({"verdicts": [{"incident_key": "A-2", "relationship": "DUPLICATE_CANDIDATE"}]})
         agent = SimilarityAgent(StructuredCaller(ScriptedProvider({"SimilarityOutput": [lambda r: out]})))
         verified, _ = agent.verify(
             current=self.current,
             shortlisted=short,
-            candidates={c.issue_key: c for c in cands},
+            candidates={c.incident_key: c for c in cands},
             correlation_id="c",
         )
         assert verified[0].relationship is RelationshipType.RELATED
@@ -351,12 +351,12 @@ def test_similarity_drops_verdicts_for_unknown_issues() -> None:
     out = SimilarityOutput.model_validate(
         {
             "verdicts": [
-                {"issue_key": "SELF-1", "relationship": "RELATED"},
-                {"issue_key": "A-1", "relationship": "UNRELATED"},
+                {"incident_key": "SELF-1", "relationship": "RELATED"},
+                {"incident_key": "A-1", "relationship": "UNRELATED"},
             ]
         },
         context={"candidates": {"A-1"}},
     )
-    assert [v.issue_key for v in out.verdicts] == ["A-1"]
+    assert [v.incident_key for v in out.verdicts] == ["A-1"]
     schema = constrained_schema(("A-1", "A-2")).model_json_schema()
     assert "A-2" in str(schema)

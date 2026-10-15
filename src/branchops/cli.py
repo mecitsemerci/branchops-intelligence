@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from branchops.config.settings import Settings, load_settings
@@ -53,7 +54,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
     container = Container.build(settings)
     workflow = container.build_workflow()
     processor = EventProcessor(
-        db=container.db, settings=settings, registry=container.registry, workflow=workflow
+        db=container.db,
+        settings=settings,
+        registry=container.registry,
+        workflow=workflow,
+        sources=container.sources,
     )
     owner = worker_identity()
     runner = InboxItemRunner(container.db, processor, settings.worker, owner)
@@ -78,6 +83,108 @@ def cmd_worker(args: argparse.Namespace) -> int:
     finally:
         container.close()
     return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    """Import a CSV/XLSX/JSONL file through a file-based pull source into the inbox."""
+    from branchops.application.commands.ingest_webhook import IngestIncidentEvent
+    from branchops.application.interfaces.source_adapter import (
+        FileImportSourceAdapter,
+        SourcePayloadError,
+        UnknownSourceError,
+    )
+    from branchops.container import Container
+    from branchops.domain.entities.incident import incident_key
+    from branchops.infrastructure.persistence.issue_repository import IssueRepository
+
+    settings = _settings(args)
+    path = Path(args.path)
+    if not path.is_file():
+        print(f"file not found: {path}", file=sys.stderr)
+        return 1
+    container = Container.build(settings)
+    try:
+        try:
+            adapter = container.sources.get(args.source)
+        except UnknownSourceError:
+            print(f"unknown or disabled source: {args.source}", file=sys.stderr)
+            return 1
+        if not isinstance(adapter, FileImportSourceAdapter):
+            print(f"source {args.source} does not import files", file=sys.stderr)
+            return 1
+        issues = IssueRepository()
+
+        def is_known(external_key: str) -> bool:
+            with container.db.session() as s:
+                return issues.exists(s, incident_key(adapter.source_id, external_key))
+
+        command = IngestIncidentEvent(container.db, settings, container.sources)
+        correlation_id = f"import:{uuid.uuid4().hex[:16]}"
+        counts: dict[str, int] = {}
+        try:
+            for event in adapter.read_file(path, is_known=is_known):
+                if args.dry_run:
+                    outcome = "parsed"
+                else:
+                    outcome = command.execute(args.source, event=event, correlation_id=correlation_id).outcome
+                counts[str(outcome)] = counts.get(str(outcome), 0) + 1
+        except SourcePayloadError as exc:
+            print(json.dumps({"error": str(exc), **counts}, ensure_ascii=False), file=sys.stderr)
+            return 2
+        audit_details = {"path": path.name, "dry_run": args.dry_run, **counts}
+        if not args.dry_run:
+            from branchops.infrastructure.persistence.audit import audit
+
+            with container.db.session() as s:
+                audit(
+                    s,
+                    actor=f"cli:{args.actor}",
+                    action="source_import",
+                    resource_type="source",
+                    resource_id=args.source,
+                    details={**audit_details, "correlation_id": correlation_id},
+                )
+        print(json.dumps({"source": args.source, "correlation_id": correlation_id, **audit_details}))
+        return 0
+    finally:
+        container.close()
+
+
+def cmd_poll(args: argparse.Namespace) -> int:
+    """Run pull sources on their schedule (leader-elected) or once."""
+    from branchops.container import Container
+    from branchops.workers.dispatcher import start_health_server
+    from branchops.workers.poller import SourcePoller
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        poller = SourcePoller(container.db, settings, container.sources, only=args.source)
+        if not poller.adapters():
+            print(
+                "no enabled pull source" + (f" named {args.source}" if args.source else ""), file=sys.stderr
+            )
+            return 1
+        if args.once:
+            events = poller.run_once(force=True)
+            print(json.dumps({"events": events}))
+            return 0
+        start_health_server(poller, settings.worker.health_port, stale_after_seconds=120)
+        signal_stop(poller.stop)
+        poller.run_forever()
+        return 0
+    finally:
+        container.close()
+
+
+def signal_stop(stop: Callable[[], None]) -> None:
+    import signal
+
+    def handler(_signum: int, _frame: object) -> None:
+        stop()
+
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
@@ -247,6 +354,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("api", help="run the FastAPI web application").set_defaults(func=cmd_api)
     sub.add_parser("worker", help="run the background inbox worker").set_defaults(func=cmd_worker)
     sub.add_parser("dashboard", help="run the NiceGUI dashboard").set_defaults(func=cmd_dashboard)
+    imp = sub.add_parser("import", help="import a CSV/XLSX/JSONL file through a file-based source")
+    imp.add_argument("--source", required=True, help="id of an enabled csv_import source")
+    imp.add_argument("path")
+    imp.add_argument("--dry-run", action="store_true", help="parse and validate only; write nothing")
+    imp.add_argument("--actor", default="operator")
+    imp.set_defaults(func=cmd_import)
+    poll = sub.add_parser("poll", help="read pull sources on their schedule (one leader across replicas)")
+    poll.add_argument("--source", default=None, help="only this source (default: all enabled pull sources)")
+    poll.add_argument("--once", action="store_true", help="poll every source once and exit")
+    poll.set_defaults(func=cmd_poll)
     sub.add_parser(
         "migrate", help="apply DB migrations, checkpoint tables and publish templates"
     ).set_defaults(func=cmd_migrate)

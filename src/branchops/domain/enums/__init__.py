@@ -1,5 +1,7 @@
 """Domain enumerations shared by every layer."""
 
+from __future__ import annotations
+
 from enum import StrEnum
 
 
@@ -36,15 +38,48 @@ class Confidence(StrEnum):
     HIGH = "HIGH"
 
 
-class JiraEventType(StrEnum):
-    ISSUE_CREATED = "ISSUE_CREATED"
-    ISSUE_UPDATED = "ISSUE_UPDATED"
-    ISSUE_DELETED = "ISSUE_DELETED"
+class IncidentEventType(StrEnum):
+    RECORD_CREATED = "RECORD_CREATED"
+    RECORD_UPDATED = "RECORD_UPDATED"
+    RECORD_DELETED = "RECORD_DELETED"
     COMMENT_CREATED = "COMMENT_CREATED"
     COMMENT_UPDATED = "COMMENT_UPDATED"
     COMMENT_DELETED = "COMMENT_DELETED"
     MANUAL_REANALYSIS = "MANUAL_REANALYSIS"
     UNSUPPORTED = "UNSUPPORTED"
+
+    @classmethod
+    def _missing_(cls, value: object) -> IncidentEventType | None:
+        # Inbox rows written before the multi-source migration carry the Jira-era values.
+        legacy = _LEGACY_EVENT_TYPES.get(str(value))
+        return cls(legacy) if legacy else None
+
+
+_LEGACY_EVENT_TYPES: dict[str, str] = {
+    "ISSUE_CREATED": "RECORD_CREATED",
+    "ISSUE_UPDATED": "RECORD_UPDATED",
+    "ISSUE_DELETED": "RECORD_DELETED",
+}
+
+
+class JiraEventType:
+    """Deprecated alias of :class:`IncidentEventType` keeping the Jira-era member names.
+
+    ``JiraEventType.ISSUE_CREATED is IncidentEventType.RECORD_CREATED`` and ``JiraEventType("ISSUE_CREATED")``
+    returns ``IncidentEventType.RECORD_CREATED``.
+    """
+
+    ISSUE_CREATED = IncidentEventType.RECORD_CREATED
+    ISSUE_UPDATED = IncidentEventType.RECORD_UPDATED
+    ISSUE_DELETED = IncidentEventType.RECORD_DELETED
+    COMMENT_CREATED = IncidentEventType.COMMENT_CREATED
+    COMMENT_UPDATED = IncidentEventType.COMMENT_UPDATED
+    COMMENT_DELETED = IncidentEventType.COMMENT_DELETED
+    MANUAL_REANALYSIS = IncidentEventType.MANUAL_REANALYSIS
+    UNSUPPORTED = IncidentEventType.UNSUPPORTED
+
+    def __new__(cls, value: str) -> IncidentEventType:  # type: ignore[misc]
+        return IncidentEventType(value)
 
 
 class InboxStatus(StrEnum):

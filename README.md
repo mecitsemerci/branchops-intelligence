@@ -1,7 +1,8 @@
 # BranchOps Intelligence
 
-On-premise, Python-only agentic application that analyses Jira operational incidents created by bank
-branch staff. It receives Jira webhooks, classifies and structures each incident with the bank's internal
+On-premise, Python-only agentic application that analyses operational incidents reported by bank branch
+staff. Incidents arrive from several sources — Jira webhooks, ServiceNow Business Rule webhooks, CSV/XLSX/JSONL
+imports — through per-source adapters into one source-neutral pipeline. It classifies and structures each incident with the bank's internal
 LLM (preferred: **GLM-5.3-Flash** via an OpenAI-compatible gateway), maps it to a versioned template,
 computes **deterministic** completeness and quality scores, recommends what information is missing,
 detects similar and recurring incidents, and shows everything in an internal NiceGUI dashboard.
@@ -11,8 +12,10 @@ package or model downloads, no external telemetry.
 
 ```mermaid
 flowchart LR
-    J[Jira webhooks] -->|HMAC / token| A[API · FastAPI]
+    J[Jira / ServiceNow webhooks] -->|HMAC / token| A[API · FastAPI]
+    F[CSV · XLSX · JSONL files] --> P[Poller / import CLI]
     A -->|INSERT, idempotent| PG[(PostgreSQL<br/>inbox + data)]
+    P -->|INSERT, idempotent| PG
     W[Worker · LangGraph] -->|FOR UPDATE SKIP LOCKED| PG
     W -->|OpenAI-compatible, TLS| M[Internal LLM gateway<br/>GLM-5.3-Flash]
     D[Dashboard · NiceGUI] --> PG
@@ -22,6 +25,7 @@ flowchart LR
 
 | Capability | Where |
 |---|---|
+| Source-agnostic ingestion: per-source adapters (Jira, ServiceNow reference, CSV/XLSX/JSONL) behind push/pull ports, `POST /api/ingest/{source}` | `application/interfaces/source_adapter.py`, `infrastructure/sources/`, [docs](docs/sources.md) |
 | Authenticated webhook ingestion (HMAC `X-Hub-Signature`, header token, rotation, size limit, CIDR allow-list) | `api/routes/webhooks.py`, `infrastructure/security/webhook_auth.py` |
 | Durable PostgreSQL inbox: idempotency, leases, retries with backoff, dead-letter, crash recovery | `infrastructure/persistence/inbox_repository.py`, `workers/` |
 | Out-of-order / partial payload handling (per-attribute version vector, tombstones) | `domain/services/snapshot_merge.py` |
@@ -104,8 +108,10 @@ make check       # ruff + mypy --strict + all tests (unit + PostgreSQL integrati
 
 | Command | Purpose |
 |---|---|
-| `branchops api` | FastAPI app (webhooks, read API, `/health/*`, `/metrics`) |
+| `branchops api` | FastAPI app (`/api/ingest/{source}`, `/api/webhooks/jira`, read API, `/health/*`, `/metrics`) |
 | `branchops worker` | Inbox worker (`/healthz`, `/readyz`, `/metrics` on `worker.health_port`) |
+| `branchops import --source csv <file>` | Import a CSV/XLSX/JSONL file through a file-based source (`--dry-run` validates only) |
+| `branchops poll [--source id] [--once]` | Read pull sources on their schedule; one leader across replicas (advisory lock) |
 | `branchops dashboard` | NiceGUI dashboard |
 | `branchops migrate` | DB migrations, checkpoint tables, template publication (immutability check) |
 | `branchops templates` | Validate and list templates |
@@ -129,6 +135,7 @@ CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite dro
 
 * [Architecture](docs/architecture.md) — layering, processes, decisions
 * [Agents](docs/agents.md) — logical agents, guardrails, adding capabilities
+* [Incident sources](docs/sources.md) — source model, configuration, ServiceNow and CSV/XLSX adapters, adding a source
 * [Jira integration](docs/jira-integration.md) — webhook setup, payload variants, ordering, retention
 * [Templates](docs/templates.md) — template format and how to add one
 * [Scoring](docs/scoring.md) — completeness/quality formulas and policies
@@ -140,7 +147,7 @@ CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite dro
 ## Assumptions and limitations
 
 * **Jira access is webhook-only.** Historical issues that never produced a webhook are not known to the
-  system; there is no backfill. An issue first seen through a partial update without summary/description
+  system; there is no Jira backfill (a CSV export can be imported through a `csv_import` source instead). An issue first seen through a partial update without summary/description
   is stored but not analysed until a fuller payload arrives.
 * **Model capabilities are configured, not guessed.** The default assumes JSON-object mode only;
   enable `structured_outputs` (JSON schema) after `branchops llm probe` confirms it. Tool calling is never

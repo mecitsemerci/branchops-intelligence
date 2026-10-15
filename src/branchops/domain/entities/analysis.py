@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from branchops.domain.entities.issue import CanonicalIssue
 from branchops.domain.enums import (
@@ -72,7 +72,8 @@ class Recommendation(BaseModel):
 
 
 class SimilarIssue(BaseModel):
-    issue_key: str
+    incident_key: str = Field(validation_alias=AliasChoices("incident_key", "issue_key"))
+    source: str = "jira"
     summary: str | None = None
     text_rank: float = 0.0
     deterministic_signals: list[str] = Field(default_factory=list)
@@ -96,7 +97,7 @@ class StepRecord(BaseModel):
 
 class AnalysisResult(BaseModel):
     analysis_id: str
-    issue_key: str
+    incident_key: str
     correlation_id: str
     inbox_event_id: str | None = None
     input_hash: str

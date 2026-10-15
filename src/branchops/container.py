@@ -9,6 +9,7 @@ from typing import Any
 
 from branchops.agents.base import StructuredCaller
 from branchops.application.interfaces.model_provider import ModelProvider
+from branchops.application.interfaces.source_adapter import SourceRegistry
 from branchops.config.settings import Settings
 from branchops.infrastructure.database.session import Database, create_db_engine
 from branchops.infrastructure.llm.mock_provider import MockModelProvider
@@ -16,6 +17,7 @@ from branchops.infrastructure.llm.openai_compatible import OpenAICompatibleModel
 from branchops.infrastructure.persistence.analysis_repository import DatabaseAnalysisSink
 from branchops.infrastructure.persistence.issue_repository import IssueRepository, SessionBoundHistoryReader
 from branchops.infrastructure.persistence.progress_repository import DatabaseProgressReporter
+from branchops.infrastructure.sources import build_source_registry
 from branchops.templates.registry import TemplateRegistry
 
 logger = logging.getLogger(__name__)
@@ -63,13 +65,14 @@ class Container:
     settings: Settings
     db: Database
     registry: TemplateRegistry
+    sources: SourceRegistry = field(default_factory=SourceRegistry)
     _closeables: list[Any] = field(default_factory=list)
 
     @classmethod
     def build(cls, settings: Settings) -> Container:
         db = Database(create_db_engine(settings.database))
         registry = TemplateRegistry.from_directory(Path(settings.templates.directory))
-        return cls(settings=settings, db=db, registry=registry)
+        return cls(settings=settings, db=db, registry=registry, sources=build_source_registry(settings))
 
     def build_workflow(self, provider: ModelProvider | None = None) -> Any:
         from branchops.workflows.issue_analysis import IssueAnalysisWorkflow

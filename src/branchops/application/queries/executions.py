@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from branchops.application.queries.filters import Page
+from branchops.domain.entities.incident import incident_key, parse_incident_key
 from branchops.infrastructure.database.models import AgentStep, Analysis, WebhookInbox
 
 
@@ -27,7 +28,9 @@ def executions(s: Session, *, status: str | None = None, page: int = 1, page_siz
     items = [
         {
             "analysis_id": str(a.id),
-            "issue_key": a.issue_key,
+            "incident_key": a.incident_key,
+            "source": parse_incident_key(a.incident_key)[0],
+            "issue_key": parse_incident_key(a.incident_key)[1],  # deprecated: use incident_key
             "status": a.status,
             "started_at": a.started_at.isoformat(),
             "duration_ms": a.duration_ms,
@@ -73,9 +76,15 @@ def execution_steps(s: Session, analysis_id: str) -> list[dict[str, Any]]:
 
 def inbox_summary(s: Session) -> dict[str, Any]:
     counts = dict(s.execute(select(WebhookInbox.status, func.count()).group_by(WebhookInbox.status)).all())
+    by_source = s.execute(
+        select(WebhookInbox.source, WebhookInbox.status, func.count()).group_by(
+            WebhookInbox.source, WebhookInbox.status
+        )
+    ).all()
     dead = s.execute(
         select(
             WebhookInbox.id,
+            WebhookInbox.source,
             WebhookInbox.issue_key,
             WebhookInbox.raw_event_name,
             WebhookInbox.attempts,
@@ -88,10 +97,13 @@ def inbox_summary(s: Session) -> dict[str, Any]:
     ).all()
     return {
         "by_status": {k: int(v) for k, v in counts.items()},
+        "by_source": [{"source": src, "status": st, "count": int(n)} for src, st, n in by_source],
         "dead_letters": [
             {
                 "event_id": str(d.id),
-                "issue_key": d.issue_key,
+                "source": d.source,
+                "incident_key": incident_key(d.source, d.issue_key) if d.issue_key else None,
+                "issue_key": d.issue_key,  # deprecated: use incident_key
                 "event": d.raw_event_name,
                 "attempts": d.attempts,
                 "last_error": (d.last_error or "")[:500],

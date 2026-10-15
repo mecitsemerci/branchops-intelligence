@@ -20,19 +20,54 @@ database:
   sslrootcert: ${DATABASE_SSLROOTCERT:-/etc/pki/bank/ca-bundle.crt}
 
 webhook:
-  auth_mode: hmac_or_token         # hmac | token | hmac_or_token
-  secrets_env: JIRA_WEBHOOK_SECRETS   # comma-separated, supports rotation
-  token_header: X-BranchOps-Webhook-Token
-  allow_query_token: false         # enable only for legacy Jira that cannot send headers
-  query_token_secrets_env: JIRA_WEBHOOK_QUERY_TOKENS
-  max_body_bytes: 1048576
-  allowed_source_cidrs: []         # e.g. ["10.20.0.0/16"] — Jira node addresses
+  max_body_bytes: 1048576          # request size limit for every push source
 
-jira:
-  field_mapping:                   # canonical field -> Jira custom field id
-    branch_code: ${JIRA_FIELD_BRANCH_CODE:-customfield_10101}
-    application: ${JIRA_FIELD_APPLICATION:-customfield_10102}
-  allowed_projects: []             # empty = all projects that send webhooks
+# Incident sources. Each enabled push source accepts POST /api/ingest/<id> (Jira also keeps the legacy
+# URL /api/webhooks/jira); pull sources are read by `branchops poll` / `branchops import`.
+# Without a `sources` list, the legacy `jira:` + `webhook:` sections are translated into one Jira source.
+sources:
+  - id: jira
+    type: jira_webhook
+    enabled: true
+    auth:
+      mode: hmac_or_token            # hmac | token | hmac_or_token
+      secrets_env: JIRA_WEBHOOK_SECRETS   # comma-separated, supports rotation
+      token_header: X-BranchOps-Webhook-Token
+      allow_query_token: false       # enable only for legacy Jira that cannot send headers
+      query_token_secrets_env: JIRA_WEBHOOK_QUERY_TOKENS
+      allowed_source_cidrs: []       # e.g. ["10.20.0.0/16"] — Jira node addresses
+    allowed_groups: []               # Jira project keys; empty = all projects that send webhooks
+    field_mapping:                   # canonical field -> Jira custom field id
+      branch_code: ${JIRA_FIELD_BRANCH_CODE:-customfield_10101}
+      application: ${JIRA_FIELD_APPLICATION:-customfield_10102}
+  - id: snow                         # reference adapter: adapt to the bank's Business Rule payload
+    type: servicenow_webhook
+    enabled: false
+    auth:
+      mode: token
+      secrets_env: SERVICENOW_WEBHOOK_SECRETS
+      token_header: X-BranchOps-Webhook-Token
+    allowed_groups: []               # assignment group names
+    field_mapping: {branch_code: u_branch_code, application: cmdb_ci}
+  - id: csv
+    type: csv_import
+    enabled: false
+    poll_interval_seconds: 300       # `branchops poll` scans options.watch_directory
+    field_mapping:
+      summary: Konu
+      description: Açıklama
+      branch_code: Sube Kodu
+      application: Uygulama
+      status: Durum
+      priority: Öncelik
+      reporter: Bildiren
+      created_at: Oluşturma
+      updated_at: Güncelleme
+      group_key: Ekip
+    options:
+      id_column: Kayıt No            # stable external key; without it rows are keyed by content hash
+      watch_directory: /data/imports
+      timezone: Europe/Istanbul
 
 retention:
   on_issue_deleted: soft_delete    # soft_delete | purge
@@ -76,7 +111,7 @@ workflow:
   node_timeout_seconds: 300
   max_repair_attempts: 1
   max_input_chars: 24000
-  prompt_version: "2026.10-2"
+  prompt_version: "2026.10-3"
   similarity:
     candidate_limit: 20
     lookback_days: 180
