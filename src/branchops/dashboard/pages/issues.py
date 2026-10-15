@@ -23,6 +23,7 @@ from branchops.dashboard.components.layout import (
 )
 from branchops.dashboard.context import DashboardContext
 from branchops.dashboard.pages.attachments import attachments_panel
+from branchops.dashboard.pages.routing_panel import routing_panel
 from branchops.domain.entities.incident import incident_key as make_incident_key
 from branchops.domain.entities.incident import is_valid_incident_key, parse_incident_key
 from branchops.domain.entities.issue import FIELD_LABELS_TR
@@ -197,6 +198,7 @@ def register(ctx: DashboardContext) -> None:
                 t_original = ui.tab("Orijinal kayıt")
                 t_similar = ui.tab("Benzer kayıtlar")
                 t_attachments = ui.tab("Ekler & bağlam")
+                t_routing = ui.tab("Yönlendirme & bildirimler")
                 t_history = ui.tab("Puan geçmişi")
             with ui.tab_panels(tabs, value=t_fields).classes("w-full"):
                 with ui.tab_panel(t_fields):
@@ -220,6 +222,8 @@ def register(ctx: DashboardContext) -> None:
                     _similar_panel(detail["relationships"], analysis)
                 with ui.tab_panel(t_attachments):
                     await attachments_panel(ctx, incident_key)
+                with ui.tab_panel(t_routing):
+                    await routing_panel(ctx, principal, incident_key)
                 with ui.tab_panel(t_history):
                     if detail["score_history"]:
                         ui.echart(history_chart(detail["score_history"])).classes("h-72 w-full")

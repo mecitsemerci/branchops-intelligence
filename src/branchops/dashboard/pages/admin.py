@@ -13,7 +13,9 @@ from fastapi import Request
 from nicegui import events, ui
 from pydantic import ValidationError
 
+from branchops.application.commands.notifications import NotificationService, send_test
 from branchops.application.commands.ownership import OwnershipService
+from branchops.application.queries.routing import unowned_screens
 from branchops.dashboard.components.layout import authorize, frame, load
 from branchops.dashboard.context import DashboardContext
 from branchops.domain.entities.ownership import (
@@ -27,7 +29,7 @@ from branchops.domain.entities.ownership import (
     TeamKind,
 )
 from branchops.domain.enums import Role
-from branchops.infrastructure.persistence.ownership_repository import OwnershipError
+from branchops.infrastructure.persistence.ownership_repository import OwnershipError, OwnershipRepository
 from branchops.infrastructure.security.auth import Principal
 
 TEAM_COLUMNS = [
@@ -152,17 +154,153 @@ async def attempt[T](fn: Callable[[], T], success: str | None = None) -> T | Non
     return result
 
 
-def test_notification_button(ctx: DashboardContext, team: dict[str, Any]) -> None:
-    """Placeholder until the notification engine exists (sends a test message to the team's channels)."""
-    with ui.button("Test bildirimi", icon="campaign").props("flat dense disable"):
-        ui.tooltip("Bildirim motoru etkinleştirildiğinde")
+def test_notification_button(ctx: DashboardContext, team: dict[str, Any], actor: str) -> None:
+    """Enqueue a test message to every configured channel (e-mail / Zoom) of the team."""
+
+    async def send() -> None:
+        service = ctx.notifications or NotificationService(ctx.settings)
+
+        def enqueue() -> int:
+            with ctx.db.session() as s:
+                registry = OwnershipRepository().load_registry(s)
+                return send_test(s, service, registry, int(team["id"]), actor)
+
+        count = await load(enqueue)
+        if count:
+            ui.notify(f"{count} bildirim kuyruğa alındı", type="positive")
+        else:
+            ui.notify("Ekipte e-posta/Zoom kanalı tanımlı değil", type="warning")
+
+    with ui.button("Test bildirimi", icon="campaign", on_click=send).props("flat dense"):
+        ui.tooltip("Ekibin e-posta ve Zoom kanallarına test bildirimi gönderir")
 
 
-def unowned_screens_card(ctx: DashboardContext, principal: Principal) -> None:
-    """Placeholder: screens of incidents whose routing fell back to branch operations."""
+UNOWNED_COLUMNS = [
+    {"name": k, "label": label, "field": k, "align": "left"}
+    for k, label in (
+        ("application_key", "Uygulama"),
+        ("screen_key", "Ekran"),
+        ("screen_title", "Başlık"),
+        ("route", "Rota"),
+        ("incidents", "Kayıt"),
+        ("fell_back_to_branch_ops", "Şube operasyona düşen"),
+        ("last_seen", "Son görülme"),
+        ("actions", ""),
+    )
+]
+
+
+def unowned_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Table row with ``assignable`` = both keys present (an owner can be assigned)."""
+    return {
+        **row,
+        "screen_title": row.get("screen_title") or "",
+        "route": row.get("route") or "",
+        "assignable": bool(row.get("application_key") and row.get("screen_key")),
+    }
+
+
+async def unowned_screens_card(ctx: DashboardContext, principal: Principal) -> None:
+    """Screens named by reports that fell back to branch operations or are not registered."""
+    service = ctx.ownership or OwnershipService(ctx.db, ctx.settings)
+    actor = principal.username
     with ui.card().classes("w-full"):
         ui.label("Sahipsiz ekranlar").classes("text-lg font-semibold")
-        ui.label("Yönlendirme kayıtları etkinleştirildiğinde doldurulur.").classes("text-slate-500")
+        ui.label(
+            "Son 90 günde sahibi bulunamayan veya kayıtlı olmayan ekranlardan gelen bildirimler."
+        ).classes("text-sm text-slate-500")
+        box = ui.column().classes("w-full")
+
+    async def render() -> None:
+        rows, teams_list, tree = await load(
+            lambda: (ctx.query(lambda s: unowned_screens(s, days=90)), service.teams(), service.tree())
+        )
+        teams = team_options([t for t in teams_list if t["active"]])
+        apps = {a["key"]: a for a in tree}
+        box.clear()
+        with box:
+            if not rows:
+                ui.label("Sahipsiz ekran yok.").classes("text-slate-500")
+                return
+            for row in (unowned_row(r) for r in rows):
+                with ui.row().classes("items-center gap-3 w-full border-b py-1"):
+                    ui.label(f"{row['application_key'] or '—'} / {row['screen_key'] or '—'}").classes(
+                        "font-mono w-64"
+                    )
+                    ui.label(row["screen_title"] or "—").classes("w-48")
+                    ui.label(row["route"] or "—").classes("w-48 text-slate-500")
+                    ui.label(f"{row['incidents']} kayıt ({row['fell_back_to_branch_ops']} şube op.)")
+                    ui.label(row["last_seen"] or "").classes("text-xs text-slate-400")
+                    ui.space()
+                    if row["assignable"]:
+                        ui.button(
+                            "Sahip ata",
+                            icon="person_add",
+                            on_click=lambda r=row: assign_dialog(r, teams, apps),
+                        ).props("flat dense")
+                    else:
+                        with ui.button("Sahip ata", icon="person_add").props("flat dense disable"):
+                            ui.tooltip("Uygulama/ekran anahtarı yok")
+
+    def assign_dialog(row: dict[str, Any], teams: dict[int, str], apps: dict[str, dict[str, Any]]) -> None:
+        with ui.dialog() as dialog, ui.card().classes("min-w-[28rem]"):
+            ui.label(f"Sahip ata: {row['application_key']}/{row['screen_key']}").classes(
+                "text-lg font-semibold"
+            )
+            team = ui.select(teams, label="Sahip ekip").classes("w-full")
+            title = ui.input("Ekran başlığı", value=row["screen_title"] or row["screen_key"]).classes(
+                "w-full"
+            )
+            route = ui.input("Rota kalıbı (isteğe bağlı)", placeholder="/eft/new").classes("w-full")
+            if row["application_key"] not in apps:
+                ui.label("Uygulama kayıtlı değil: seçilen ekip uygulama sahibi olarak da atanır.").classes(
+                    "text-sm text-orange-700"
+                )
+
+            async def save() -> None:
+                if team.value is None:
+                    ui.notify("Ekip seçin", type="warning")
+                    return
+                owner = int(team.value)
+
+                def create() -> int:
+                    app = apps.get(row["application_key"])
+                    if app is None:
+                        app = service.save_application(
+                            ApplicationInput(
+                                key=row["application_key"], name=row["application_key"], owner_team_id=owner
+                            ),
+                            actor,
+                        )
+                    service.save_screen(
+                        ScreenInput(
+                            application_id=app["id"],
+                            key=row["screen_key"],
+                            title=title.value or row["screen_key"],
+                            route_pattern=blank_to_none(route.value),
+                            owner_team_id=owner,
+                        ),
+                        actor,
+                    )
+                    rerouted = 0
+                    if ctx.router is not None:
+                        for key in row["incident_keys"][:5]:
+                            ctx.router.reroute(key, actor)
+                            rerouted += 1
+                    return rerouted
+
+                rerouted = await attempt(create)
+                if rerouted is not None:
+                    ui.notify(f"Ekran kaydedildi, {rerouted} kayıt yeniden yönlendirildi", type="positive")
+                    dialog.close()
+                    await render()
+
+            with ui.row():
+                ui.button("Kaydet", on_click=save)
+                ui.button("Vazgeç", on_click=dialog.close).props("flat")
+        dialog.open()
+
+    await render()
 
 
 # --------------------------------------------------------------------------------------------- page
@@ -297,7 +435,7 @@ async def teams_panel(ctx: DashboardContext, service: OwnershipService, principa
                         await render()
 
                     ui.switch("Aktif", value=team["active"], on_change=toggle)
-                    test_notification_button(ctx, team)
+                    test_notification_button(ctx, team, actor)
                     ui.button(
                         icon="edit", on_click=lambda t=team: team_dialog(service, actor, t, render)
                     ).props("flat dense")
@@ -466,7 +604,7 @@ async def applications_panel(ctx: DashboardContext, service: OwnershipService, p
                     ui.button("Uygula", on_click=apply_bulk)
 
             csv_card(service, actor, render)
-            unowned_screens_card(ctx, principal)
+            await unowned_screens_card(ctx, principal)
 
     await render()
 

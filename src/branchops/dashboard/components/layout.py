@@ -22,6 +22,7 @@ NAV = [
     ("/issues", "Kayıt Gezgini", "search"),
     ("/analytics", "Kalite Analitiği", "insights"),
     ("/executions", "Ajan Çalıştırmaları", "memory"),
+    ("/bildirimler", "Bildirimler", "notifications"),
     ("/yonetim", "Yönetim", "admin_panel_settings"),
 ]
 

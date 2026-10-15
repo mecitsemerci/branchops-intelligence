@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><title>{{ subject }}</title></head>
+<body style="font-family: Arial, sans-serif; font-size: 14px;">
+<p>Bu bir <b>BranchOps test bildirimidir</b>: {{ team_name }} ekibinin {{ channel_tr }} kanalı çalışıyor.</p>
+{% if off_hours %}<p>Not: şu an ekibin mesai saatleri dışında.{% if oncall_contact %} Nöbetçi: {{ oncall_contact }}{% endif %}</p>{% endif %}
+<p style="color:#64748b;">Gönderen: {{ requested_by }}</p>
+</body></html>

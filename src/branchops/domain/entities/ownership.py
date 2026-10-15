@@ -472,7 +472,8 @@ def resolve_owner(
         and bool(ctx.app_key or ctx.screen_key or ctx.route),
         screen_unregistered=screen is None and bool(ctx.screen_key or ctx.route),
         application_id=application.id if application else None,
-        application_key=application.key if application else None,
+        # Unknown keys are kept so that "unowned screens" can be listed and assigned later.
+        application_key=application.key if application else (ctx.app_key or None),
         screen_id=screen.id if screen else None,
         screen_key=screen.key if screen else (ctx.screen_key or None),
         matched_rule_ids=tuple(r.id for r in matched),

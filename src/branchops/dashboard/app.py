@@ -15,11 +15,13 @@ from fastapi.responses import Response
 from nicegui import app, ui
 
 from branchops.application.commands.attachments import AttachmentService
+from branchops.application.commands.notifications import NotificationService
 from branchops.application.commands.ownership import OwnershipService
+from branchops.application.commands.routing import IncidentRouter
 from branchops.application.queries.read_models import ReadModels
 from branchops.config.settings import Settings
 from branchops.dashboard.context import DashboardContext
-from branchops.dashboard.pages import admin, analytics, executions, issues, live, overview
+from branchops.dashboard.pages import admin, analytics, executions, issues, live, notifications, overview
 from branchops.dashboard.pages.attachments import serve_attachment
 from branchops.infrastructure.attachments import build_attachment_store
 from branchops.infrastructure.database.session import Database, create_db_engine
@@ -36,7 +38,9 @@ def build_dashboard(settings: Settings) -> DashboardContext:
     )
     ctx.ownership = OwnershipService(ctx.db, settings)
     ctx.attachments = AttachmentService(settings, build_attachment_store(settings))
-    for module in (live, overview, issues, analytics, executions, admin):
+    ctx.router = IncidentRouter(ctx.db, settings)
+    ctx.notifications = NotificationService(settings)
+    for module in (live, overview, issues, analytics, executions, notifications, admin):
         module.register(ctx)
 
     @app.get("/attachments/{attachment_id}")

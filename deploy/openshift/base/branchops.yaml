@@ -74,6 +74,25 @@ ownership:
   branch_ops_team_key: branch-ops   # CC on every routed notification, fallback owner
   platform_team_key: platform       # receives ownership_unresolved together with branch-ops
 
+# Notifications of routed (in-app reported) incidents; drained by the worker from notification_outbox.
+notifications:
+  enabled: true
+  email:
+    backend: smtp                  # smtp | log | null
+    smtp_host: smtp-relay.bank.internal
+    smtp_port: 587
+    starttls: true
+    ca_bundle: /etc/pki/bank/ca-bundle.crt
+    username_env: SMTP_USERNAME
+    password_env: SMTP_PASSWORD
+    from_address: branchops@bank.internal
+    from_name: BranchOps
+  zoom:
+    backend: webhook               # webhook | log | null
+    # Bank egress proxy in front of Zoom incoming webhooks: <base>/<team.zoom_channel_id>?format=full
+    webhook_base_url: ${ZOOM_WEBHOOK_BASE_URL:-https://zoom-egress.bank.internal/chat/webhooks/incomingwebhook}
+    ca_bundle: /etc/pki/bank/ca-bundle.crt
+
 # Incident reporting through MCP (report_incident / add_incident_update); adds an `mcp_report` source "app".
 reporting:
   enabled: true

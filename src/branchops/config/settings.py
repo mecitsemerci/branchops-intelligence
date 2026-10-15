@@ -205,6 +205,44 @@ class AttachmentSettings(BaseModel):
     forward_to_ticketing: bool = True
 
 
+class EmailChannelSettings(BaseModel):
+    """Internal SMTP relay. ``backend: log`` only logs (development), ``null`` drops."""
+
+    backend: Literal["smtp", "log", "null"] = "log"
+    smtp_host: str | None = None  # e.g. smtp-relay.bank.internal
+    smtp_port: int = 587
+    starttls: bool = True
+    ca_bundle: str | None = None
+    username_env: str | None = None  # environment variable NAMES (secrets via OpenShift Secret)
+    password_env: str | None = None
+    from_address: str = "branchops@bank.internal"
+    from_name: str = "BranchOps"
+    timeout_seconds: float = 20.0
+
+
+class ZoomChannelSettings(BaseModel):
+    """Zoom Team Chat incoming webhooks, reached through the bank's egress proxy.
+
+    The URL is ``<webhook_base_url>/<team.zoom_channel_id>?format=full`` with the team's verification token
+    (environment variable named by ``team.zoom_webhook_secret_ref``) in the Authorization header.
+    """
+
+    backend: Literal["webhook", "log", "null"] = "log"
+    webhook_base_url: str | None = (
+        None  # e.g. https://zoom-egress.bank.internal/chat/webhooks/incomingwebhook
+    )
+    ca_bundle: str | None = None
+    timeout_seconds: float = 15.0
+
+
+class NotificationSettings(BaseModel):
+    enabled: bool = True
+    email: EmailChannelSettings = EmailChannelSettings()
+    zoom: ZoomChannelSettings = ZoomChannelSettings()
+    # Templates live in <templates.directory>/notifications/*.j2 unless set.
+    template_directory: str | None = None
+
+
 class OwnershipSettings(BaseModel):
     """Screen ownership registry and routing (data is managed in the dashboard under /yonetim)."""
 
@@ -419,6 +457,7 @@ class Settings(BaseModel):
     outbox: OutboxSettings = OutboxSettings()
     ownership: OwnershipSettings = OwnershipSettings()
     attachments: AttachmentSettings = AttachmentSettings()
+    notifications: NotificationSettings = NotificationSettings()
 
     @model_validator(mode="before")
     @classmethod
@@ -460,6 +499,12 @@ class Settings(BaseModel):
                     )
             if self.reporting.enabled and not os.environ.get(self.security.pseudonym_key_env):
                 raise ValueError(f"reporting: {self.security.pseudonym_key_env} must be set in production")
+            if self.notifications.enabled:
+                email, zoom = self.notifications.email, self.notifications.zoom
+                if email.backend == "smtp" and not email.smtp_host:
+                    raise ValueError("notifications.email: smtp_host is required")
+                if zoom.backend == "webhook" and not (zoom.webhook_base_url or "").startswith("https://"):
+                    raise ValueError("notifications.zoom.webhook_base_url must use https in production")
             if self.ticketing.sink == "jira":
                 if not (self.ticketing.base_url or "").startswith("https://"):
                     raise ValueError("ticketing.base_url must use https in production")

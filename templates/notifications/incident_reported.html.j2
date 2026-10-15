@@ -1,0 +1,8 @@
+{% extends "_base.html.j2" %}
+{% block body %}
+<p>{% if rerouted %}Kayıt <b>yeniden yönlendirildi</b>.{% else %}Uygulama içinden <b>yeni bir sorun</b> bildirildi.{% endif %}</p>
+<p style="font-size:16px;"><b>{{ summary }}</b></p>
+{% if error_code %}<p>Hata kodu: <code>{{ error_code }}</code></p>{% endif %}
+<p style="white-space:pre-wrap;">{{ description_excerpt }}</p>
+<p style="color:#64748b;">Eşleşme: {{ matched_level_tr }}</p>
+{% endblock %}

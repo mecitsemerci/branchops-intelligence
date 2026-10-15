@@ -448,3 +448,39 @@ class IncidentAppContext(Base):
     context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     security_flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentRouting(Base):
+    """Current routing decision of a reported incident (owner, To/CC teams, how it was matched)."""
+
+    __tablename__ = "incident_routing"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    owner_team_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    to_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    cc_team_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    channels: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    matched_level: Mapped[str] = mapped_column(String(40), nullable=False)
+    unowned_screen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    screen_unregistered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    application_key: Mapped[str | None] = mapped_column(String(64))
+    screen_key: Mapped[str | None] = mapped_column(String(64))
+    matched_rule_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    reasons: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    decided_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    first_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationOutbox(OutboxMixin, Base):
+    """One notification to one recipient on one channel; idempotent per incident/event/channel/recipient."""
+
+    __tablename__ = "notification_outbox"
+    __table_args__ = (Index("ix_notification_outbox_claim", "status", "available_at"),)
+
+    event: Mapped[str] = mapped_column(String(40), nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(320), nullable=False)
+    team_id: Mapped[int | None] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(10), nullable=False, default="to")  # to | cc

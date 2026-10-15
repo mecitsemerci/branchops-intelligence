@@ -1,0 +1,11 @@
+Kayıt: {{ incident_key }}
+{% if application %}Uygulama: {{ application }}
+{% endif %}{% if screen %}Ekran: {{ screen }}
+{% endif %}{% if branch_code %}Şube: {{ branch_code }}
+{% endif %}{% if owner %}Sahip ekip: {{ owner }}
+{% endif %}{% if cc_teams %}Bilgi (CC): {{ cc_teams | join(", ") }}
+{% endif %}{% if attachment_count %}Ekler: {{ attachment_count }} dosya (panelde)
+{% endif %}{% if link %}Panel: {{ link }}
+{% endif %}
+--
+Bu ileti BranchOps tarafından otomatik gönderildi ({{ recipient_role_tr }}). Kişisel veriler maskelenmiştir.

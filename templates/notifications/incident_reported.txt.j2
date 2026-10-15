@@ -1,0 +1,11 @@
+{% if off_hours %}MESAİ DIŞI BİLDİRİM{% if oncall_contact %} — Nöbetçi: {{ oncall_contact }}{% endif %}
+
+{% endif %}{% if rerouted %}Kayıt yeniden yönlendirildi.{% else %}Uygulama içinden yeni bir sorun bildirildi.{% endif %}
+
+Özet: {{ summary }}
+{% if error_code %}Hata kodu: {{ error_code }}
+{% endif %}
+{{ description_excerpt }}
+
+Eşleşme: {{ matched_level_tr }}
+{% include "_footer.txt.j2" %}

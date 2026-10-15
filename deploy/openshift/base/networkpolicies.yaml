@@ -108,3 +108,41 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}
       ports:
         - {protocol: TCP, port: 4318}
+---
+# Worker -> notification and ticketing endpoints: internal SMTP relay, Zoom egress proxy, internal Jira.
+# Adjust the namespace labels / ipBlocks to the bank's mail relay, egress proxy and Jira in the overlay.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: branchops-allow-delivery}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: branchops-worker}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: mail-relay}}
+      ports:
+        - {protocol: TCP, port: 587}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: egress-proxy}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: jira}}
+      ports:
+        - {protocol: TCP, port: 443}
+---
+# Attachment store (only with attachments.store: s3): processes that read or write attachments.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: branchops-allow-object-store}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [branchops-api, branchops-worker, branchops-dashboard, branchops-mcp]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: object-storage}}
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 9000}

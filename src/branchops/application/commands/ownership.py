@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -158,6 +159,13 @@ class OwnershipService:
         """Registry validation plus active rules that matched no incident in ``preview_days``."""
         registry = self.registry()
         findings = registry_findings(registry, self._settings.ownership.branch_ops_team_key)
+        if self._settings.notifications.enabled:
+            production = self._settings.app.environment == "production"
+            findings += [
+                f if production else Finding("warning", f.code, f.message)
+                for f in notification_findings(registry, self._settings)
+                if f.code != "branch_ops_missing"
+            ]
         for rule in registry.rules:
             if not rule.active:
                 continue
@@ -283,3 +291,27 @@ def registry_findings(registry: OwnershipRegistry, branch_ops_team_key: str) -> 
                 Finding("warning", "rule_unknown_application", f"rule {r.name!r}: unknown application key")
             )
     return out
+
+
+def notification_findings(registry: OwnershipRegistry, settings: Settings) -> list[Finding]:
+    """The branch operations team needs a channel that can actually deliver (production guard)."""
+    ops = registry.team_by_key(settings.ownership.branch_ops_team_key)
+    if ops is None or not ops.active:
+        return [Finding("error", "branch_ops_missing", "branch operations team is missing or inactive")]
+    cfg = settings.notifications
+    email_ok = bool(ops.email) and cfg.email.backend == "smtp"
+    zoom_ok = (
+        bool(ops.zoom_channel_id and ops.zoom_webhook_secret_ref)
+        and cfg.zoom.backend == "webhook"
+        and bool(os.environ.get(ops.zoom_webhook_secret_ref or ""))
+    )
+    if not (email_ok or zoom_ok):
+        return [
+            Finding(
+                "error",
+                "branch_ops_unreachable",
+                f"branch operations team {ops.key!r} has no working channel "
+                "(e-mail with the smtp backend, or Zoom with the webhook backend and its token set)",
+            )
+        ]
+    return []

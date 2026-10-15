@@ -6,7 +6,7 @@ core processes (plus the optional source poller and MCP server) that share the s
 | Process   | Entry point                 | Responsibility                                                     |
 |-----------|-----------------------------|--------------------------------------------------------------------|
 | API       | `branchops api`             | Push-source ingestion (Jira, ServiceNow, …), read API, health probes, `/metrics` |
-| Worker    | `branchops worker`          | Claims inbox events, merges incident state, runs the analysis workflow |
+| Worker    | `branchops worker`          | Claims inbox events, merges incident state, runs the analysis workflow; drains the ticketing and notification outboxes; purges old attachments |
 | Dashboard | `branchops dashboard`       | NiceGUI operational dashboard (read-only + re-analysis requests)    |
 | Poller    | `branchops poll`            | Optional: reads pull sources (file drops, …) into the inbox; one leader via advisory lock |
 | MCP       | `branchops mcp`             | Optional: read-only, team-scoped MCP server for other teams' MCP clients; never calls the LLM ([details](mcp-server.md)) |
@@ -100,6 +100,7 @@ sequenceDiagram
 | AD-9 | oauth2-proxy sidecar (OIDC) for SSO | Reuses the bank IdP and its groups for RBAC; the app binds to loopback and only trusts identity headers from the sidecar. |
 | AD-11 | **Ports & Adapters for incident sources** | Every source normalises into one canonical `IncidentEvent`; identity is `incident_key = source:external_key`. Everything after the inbox is source-neutral, so a new source is one adapter + configuration (see [sources](sources.md)). |
 | AD-12 | **MCP server serves data, not reasoning** | Other teams query BranchOps from their own MCP clients through fixed, parameterised tools; team scopes are SQL predicates on the shared read models, the server never calls the LLM and has no raw-query tool (see [MCP server](mcp-server.md)). |
+| AD-13 | **Ownership is data; routing is deterministic** | Teams, applications, screens and routing rules live in PostgreSQL and are edited in the dashboard; `resolve_owner` is a pure function (no model). Notifications and tickets are written to transactional outboxes in the same transaction as the report and delivered by the worker (see [ownership and routing](ownership-and-routing.md)). |
 | AD-10 | Outbound URL guard | LLM and telemetry endpoints must resolve to allow-listed internal hosts; public hosts are refused at startup. |
 
 See the other documents in `docs/` for the details of each subsystem.
@@ -119,7 +120,7 @@ src/branchops/
                   LLM providers, security, observability
   workers/        dispatcher (claim loop, health server), per-event runner (leases, retries), pull-source poller
   dashboard/      NiceGUI pages and components
-  mcp/            read-only MCP server: auth/teams, tools, resources, prompts, audit middleware
+  mcp/            MCP server: auth/teams, read tools, reporting / ownership tools, resources, prompts, audit middleware
   config/         settings (YAML + env interpolation, production guards)
   container.py    composition root;  cli.py  `branchops` entry point
 templates/        versioned JSON templates      samples/{jira,servicenow,csv}/  synthetic Turkish payloads

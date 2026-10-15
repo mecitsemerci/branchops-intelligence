@@ -12,6 +12,7 @@ dashboard: {host: 0.0.0.0, port: 8090}
 # Dev auth and no teams: every MCP caller is the dev principal in one unrestricted "dev" team.
 mcp: {host: 0.0.0.0, port: 8095}
 reporting: {enabled: true}          # MCP report_incident / add_incident_update (source "app")
+notifications: {email: {backend: log}, zoom: {backend: log}}   # notifications are logged, not sent
 database:
   url: ${DATABASE_URL:-postgresql+psycopg://branchops:branchops@postgres:5432/branchops}
 sources:

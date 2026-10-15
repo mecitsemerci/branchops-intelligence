@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% block body %}
+<p><b>Sahibi bulunamayan bir ekrandan</b> sorun bildirildi; kayıt şube operasyon ekibine yönlendirildi.</p>
+<p style="font-size:16px;"><b>{{ summary }}</b></p>
+<p>Uygulama anahtarı: <code>{{ application_key or "—" }}</code> · Ekran anahtarı: <code>{{ screen_key or "—" }}</code>{% if route %} · Rota: <code>{{ route }}</code>{% endif %}</p>
+<p>Lütfen panelde <i>Yönetim › Uygulamalar &amp; Ekranlar › Sahipsiz ekranlar</i> bölümünden sahip atayın.</p>
+{% endblock %}

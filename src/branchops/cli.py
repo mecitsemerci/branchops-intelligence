@@ -54,12 +54,16 @@ def cmd_worker(args: argparse.Namespace) -> int:
     setup_telemetry(settings, role="worker")
     container = Container.build(settings)
     workflow = container.build_workflow()
+    from branchops.application.commands.routing import IncidentRouter
+
+    check_notification_readiness(container)
     processor = EventProcessor(
         db=container.db,
         settings=settings,
         registry=container.registry,
         workflow=workflow,
         sources=container.sources,
+        on_analysis=IncidentRouter(container.db, settings).on_analysis_complete,
     )
     owner = worker_identity()
     runner = InboxItemRunner(container.db, processor, settings.worker, owner)
@@ -111,6 +115,21 @@ def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
             return attachments.purge(s)
 
     tasks: list[Any] = [PeriodicTask("attachment-retention", purge, 3600.0)]
+    if settings.notifications.enabled:
+        from branchops.application.commands.notifications import NOTIFICATION_OUTBOX
+        from branchops.infrastructure.notifications import build_channels
+        from branchops.infrastructure.notifications.handler import NotificationHandler
+
+        tasks.append(
+            OutboxDrainer(
+                "notifications",
+                db,
+                NOTIFICATION_OUTBOX,
+                NotificationHandler(db, build_channels(settings)),
+                settings.outbox,
+                owner,
+            )
+        )
     sink = build_ticketing_sink(settings)
     if sink is not None:
         tasks.append(
@@ -126,6 +145,19 @@ def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
     for task in tasks:
         task.start()
     return tasks
+
+
+def check_notification_readiness(container: Any) -> None:
+    """Production guard: the branch-ops team must exist, be active and be reachable on a working channel."""
+    from branchops.application.commands.ownership import OwnershipService, notification_findings
+
+    settings = container.settings
+    if settings.app.environment != "production" or not settings.notifications.enabled:
+        return
+    findings = notification_findings(OwnershipService(container.db, settings).registry(), settings)
+    errors = [f.message for f in findings if f.level == "error"]
+    if errors:
+        raise SystemExit("refusing to start: " + "; ".join(errors))
 
 
 def cmd_attachments(args: argparse.Namespace) -> int:

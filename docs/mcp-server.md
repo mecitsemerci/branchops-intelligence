@@ -90,7 +90,7 @@ mcp:
   max_page_size: 50                  # caps page_size in search_incidents
   max_text_chars: 4000               # longer description/comment text is cut and marked
   rate_limit_per_minute: 120         # per principal, per replica (429 + Retry-After)
-  max_request_bytes: 65536           # larger JSON-RPC requests get 413
+  max_request_bytes: 65536           # larger JSON-RPC requests get 413 (raised for attachments, see below)
   teams:
     - id: branch-ops
       groups: [branchops-branch-ops] # IdP groups from the oauth2-proxy groups header
@@ -169,9 +169,12 @@ computed deterministically by BranchOps; clients should report them, not recompu
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `check_incident_draft` | `draft` (title, description, branch_code?, application?, error_details?, occurred_at?, …) | the template the incident would be scored with, missing required/optional fields with what to ask, invalid values, prompt-injection flags. Deterministic, nothing is stored. |
-| `report_incident` | `draft`, `idempotency_key?` | `incident_key` (`app:RPT-…`), `status` (`accepted` / `duplicate`), `ticketing` (`queued` / `disabled`), the draft check |
-| `add_incident_update` | `incident_key`, `text` (3–4000 chars) | `comment_id`; the incident is re-analysed |
+| `check_incident_draft` | `draft` (title, description, branch_code?, application?, error_details?, occurred_at?, …, `app_context?`) | the template the incident would be scored with, missing required/optional fields with what to ask, invalid values, prompt-injection flags, and a short-lived `draft_token` for uploads. Deterministic; the report itself is not stored. |
+| `upload_attachment` | `filename`, `content_type` (`image/png`, `image/jpeg`, `text/plain`), `data_base64`, `kind` (`screenshot` / `log` / `other`), `incident_key` **or** `draft_token`, `blur_regions?` (`[[x, y, w, h], …]`, max 20) | `attachment_id`, size after re-encoding, `blurred_regions`, `incident_key` (null while on a draft), `ticketing` (`queued` / `disabled` / `pending_report`) |
+| `report_incident` | `draft`, `idempotency_key?`, `draft_token?` | `incident_key` (`app:RPT-…`), `status` (`accepted` / `duplicate`), `ticketing` (`queued` / `disabled`), the draft check; `extra.routing` (owner team, CC teams, matched level, queued notifications) and `extra.attachments_bound` |
+| `add_incident_update` | `incident_key`, `text` (3–4000 chars) | `comment_id`; the incident is re-analysed and `update_added` notifications go to the routed teams |
+| `list_teams` | – | active teams with public contacts and working hours |
+| `resolve_owner` | `app_id`, `screen_id?`, `route?` | owner, To and CC teams, matched level, `unowned_screen`, application/screen names, reasons (deterministic; see [ownership and routing](ownership-and-routing.md)) |
 
 * **Reports.** A report is an ordinary incident of the `mcp_report` source (`reporting.source_id`, default
   `app`). The command writes the canonical event to the inbox in one transaction, together with a ticket
@@ -181,8 +184,18 @@ computed deterministically by BranchOps; clients should report them, not recompu
   incident key.
 * **Updates.** Only incidents reported through BranchOps can be updated, and only by callers whose scope
   includes them (or by the reporter while the report is still queued).
+* `list_teams` and `resolve_owner` are read tools and are registered even when reporting is disabled.
+* **In-app context and attachments.** `draft.app_context` (application, screen, route, error code, recent
+  requests, log excerpt, device …) is masked, stored separately, used for routing and never sent to a model.
+  Attachments are re-encoded (metadata dropped), blurred where requested, size- and count-limited and never
+  sent to a model. See the [embedded agent guide](embedded-agent-guide.md).
+* **Routing.** `report_incident` resolves the owning team from the ownership registry and enqueues
+  notifications (owner To, branch operations CC); see [ownership and routing](ownership-and-routing.md).
+* **Request size.** With reporting enabled the request limit is raised to fit one base64 attachment:
+  `max(mcp.max_request_bytes, attachments.max_bytes × 4/3 + 64 KB)` (≈ 4.1 MB for 3 MB files).
 * **Ticketing** (`ticketing.sink: jira`). The worker drains `ticketing_outbox` and, through the internal Jira
-  REST API, creates a ticket in `default_project_key` and adds updates as comments. Only masked text leaves
+  REST API, creates a ticket in the owner team's `jira_project_key` (else `default_project_key`), adds
+  updates as comments and forwards attachments. Only masked text leaves
   BranchOps. Tickets carry the `branchops-reported` label: exclude that label or the project from the Jira
   source so that the tickets are not ingested back.
 
@@ -209,6 +222,7 @@ Examples (arguments as a client sends them):
 | `weekly-branch-report` | `branch_code`, `days=7` | page through the branch's incidents, recurring errors and weakest analyses, then write a report |
 | `investigate-recurring-error` | `error_signature` | collect the signature's group, incident analyses and related incidents; separate observations from hypotheses |
 | `missing-information-checklist` | `incident_key` | combine the analysis with its template into a checklist and a message to the branch |
+| `report-from-app` | `app_id`, `screen_id?` | for agents embedded in a bank application: gather `app_context`, tell the user the owner (`resolve_owner`), ask only missing required fields, upload a blurred screenshot, confirm, report, show key / owner / notification status |
 
 Prompts contain no bank data; they only say which tools to call and how to present the results.
 

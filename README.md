@@ -38,6 +38,8 @@ flowchart LR
 | Evidence verification (anti-hallucination), PII masking, prompt-injection flags | `domain/services/` |
 | Similar / duplicate / recurring incidents (PostgreSQL FTS `turkish` + error signatures) | `agents/similarity.py`, `issue_repository.py` |
 | Dashboard: overview, explorer, issue detail, quality analytics, agent executions, dead letters | `dashboard/` |
+| In-app incident reporting via MCP: app context, screenshots (re-encoded, blurred, never sent to the LLM), draft check, Jira ticket outbox | `mcp/reporting.py`, `application/commands/`, [docs](docs/embedded-agent-guide.md) |
+| Screen ownership registry managed in the dashboard (`/yonetim`), deterministic owner routing, e-mail / Zoom notifications through an outbox (branch operations always CC) | `domain/entities/ownership.py`, `application/commands/routing.py`, [docs](docs/ownership-and-routing.md) |
 | Read-only MCP server for other teams (Claude, Cursor, chatbots): team-scoped tools, resources, prompts; audited | `mcp/`, [docs](docs/mcp-server.md) |
 | OpenTelemetry metrics (Prometheus) and traces (internal OTLP only) | `infrastructure/observability/` |
 | OpenShift manifests: non-root, read-only FS, probes, NetworkPolicies, HPA, oauth2-proxy SSO | `deploy/openshift/` |
@@ -113,7 +115,9 @@ make check       # ruff + mypy --strict + all tests (unit + PostgreSQL integrati
 | Command | Purpose |
 |---|---|
 | `branchops api` | FastAPI app (`/api/ingest/{source}`, `/api/webhooks/jira`, read API, `/health/*`, `/metrics`) |
-| `branchops worker` | Inbox worker (`/healthz`, `/readyz`, `/metrics` on `worker.health_port`) |
+| `branchops worker` | Inbox worker; also drains the ticketing and notification outboxes and purges old attachments (`/healthz`, `/readyz`, `/metrics` on `worker.health_port`) |
+| `branchops ownership check` | Validate the screen ownership registry (exit 1 on errors) |
+| `branchops attachments purge` | Apply `retention.attachments_days` now |
 | `branchops import --source csv <file>` | Import a CSV/XLSX/JSONL file through a file-based source (`--dry-run` validates only) |
 | `branchops poll [--source id] [--once]` | Read pull sources on their schedule; one leader across replicas (advisory lock) |
 | `branchops dashboard` | NiceGUI dashboard |
@@ -146,6 +150,8 @@ CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite dro
 * [Scoring](docs/scoring.md) — completeness/quality formulas and policies
 * [Model integration](docs/model-integration.md) — gateway configuration, capabilities, fallbacks
 * [MCP server](docs/mcp-server.md) — connecting MCP clients, team scopes, tool catalogue, audit
+* [Ownership and routing](docs/ownership-and-routing.md) — teams/applications/screens, resolution order, notifications, dashboard how-to, CSV
+* [Embedded agent guide](docs/embedded-agent-guide.md) — reporting from inside a bank application with app context and screenshots
 * [Security](docs/security.md) — controls and threat model
 * [OpenShift deployment](docs/openshift-deployment.md) — offline build and deployment
 * [Evaluation](docs/evaluation.md) — test strategy, synthetic data, model evaluation
