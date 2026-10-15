@@ -1,4 +1,4 @@
-"""Issue snapshot persistence, retention and historical retrieval."""
+"""Incident snapshot persistence, retention and historical retrieval."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from branchops.application.interfaces.repositories import CandidateIssue
-from branchops.domain.entities.jira import JiraIssueSnapshot
+from branchops.domain.entities.incident import IncidentSnapshot, parse_incident_key
 from branchops.infrastructure.database.models import (
     Analysis,
     Issue,
@@ -25,12 +25,12 @@ _CANDIDATES_SQL = text(
         SELECT CASE WHEN plainto_tsquery('turkish', :query)::text = '' THEN NULL
                     ELSE replace(plainto_tsquery('turkish', :query)::text, '&', '|')::tsquery END AS tsq
     )
-    SELECT i.issue_key, i.summary, left(i.description, 400) AS description_excerpt,
+    SELECT i.incident_key, i.source, i.summary, left(i.description, 400) AS description_excerpt,
            i.category, i.subcategory, i.branch_code, i.application, i.error_signature,
            coalesce(i.source_created_at, i.created_at) AS created_at,
            CASE WHEN q.tsq IS NULL THEN 0 ELSE ts_rank_cd(i.search_vector, q.tsq) END AS rank
     FROM issues i CROSS JOIN q
-    WHERE i.issue_key <> :issue_key
+    WHERE i.incident_key <> :incident_key
       AND NOT i.is_deleted
       AND coalesce(i.source_created_at, i.created_at) >= now() - make_interval(days => :days)
       AND ((q.tsq IS NOT NULL AND i.search_vector @@ q.tsq)
@@ -42,21 +42,32 @@ _CANDIDATES_SQL = text(
 
 
 class IssueRepository:
-    def lock_snapshot(self, session: Session, issue_key: str) -> JiraIssueSnapshot | None:
+    def lock_snapshot(self, session: Session, incident_key: str) -> IncidentSnapshot | None:
         row = session.execute(
-            select(Issue.snapshot).where(Issue.issue_key == issue_key).with_for_update()
+            select(Issue.snapshot).where(Issue.incident_key == incident_key).with_for_update()
         ).scalar_one_or_none()
-        return JiraIssueSnapshot.model_validate(row) if row is not None else None
+        return IncidentSnapshot.model_validate(row) if row is not None else None
 
-    def get_snapshot(self, session: Session, issue_key: str) -> JiraIssueSnapshot | None:
-        row = session.execute(select(Issue.snapshot).where(Issue.issue_key == issue_key)).scalar_one_or_none()
-        return JiraIssueSnapshot.model_validate(row) if row is not None else None
+    def get_snapshot(self, session: Session, incident_key: str) -> IncidentSnapshot | None:
+        row = session.execute(
+            select(Issue.snapshot).where(Issue.incident_key == incident_key)
+        ).scalar_one_or_none()
+        return IncidentSnapshot.model_validate(row) if row is not None else None
 
-    def save_snapshot(self, session: Session, snapshot: JiraIssueSnapshot) -> None:
+    def exists(self, session: Session, incident_key: str) -> bool:
+        found = session.execute(
+            select(Issue.incident_key).where(Issue.incident_key == incident_key)
+        ).scalar_one_or_none()
+        return found is not None
+
+    def save_snapshot(self, session: Session, snapshot: IncidentSnapshot) -> None:
         values = {
-            "issue_key": snapshot.issue_key,
-            "issue_id": snapshot.issue_id,
-            "project_key": snapshot.project_key,
+            "incident_key": snapshot.incident_key,
+            "source": snapshot.source,
+            "external_key": snapshot.external_key,
+            "issue_key": snapshot.external_key,
+            "external_id": snapshot.external_id,
+            "group_key": snapshot.group_key,
             "summary": snapshot.summary,
             "description": snapshot.description,
             "status": snapshot.status,
@@ -66,12 +77,14 @@ class IssueRepository:
             "is_deleted": snapshot.deleted,
         }
         stmt = insert(Issue).values(**values)
-        update_cols: dict[str, Any] = {k: stmt.excluded[k] for k in values if k != "issue_key"}
+        update_cols: dict[str, Any] = {
+            k: stmt.excluded[k] for k in values if k not in ("incident_key", "source", "external_key")
+        }
         update_cols["updated_at"] = func.now()
-        session.execute(stmt.on_conflict_do_update(index_elements=["issue_key"], set_=update_cols))
+        session.execute(stmt.on_conflict_do_update(index_elements=["incident_key"], set_=update_cols))
         for c in snapshot.comments:
             cstmt = insert(IssueComment).values(
-                issue_key=snapshot.issue_key,
+                incident_key=snapshot.incident_key,
                 comment_id=c.comment_id,
                 body=c.body,
                 author=c.author,
@@ -81,7 +94,7 @@ class IssueRepository:
             )
             session.execute(
                 cstmt.on_conflict_do_update(
-                    index_elements=["issue_key", "comment_id"],
+                    index_elements=["incident_key", "comment_id"],
                     set_={
                         "body": cstmt.excluded.body,
                         "updated_at": cstmt.excluded.updated_at,
@@ -90,36 +103,37 @@ class IssueRepository:
                 )
             )
 
-    def mark_deleted(self, session: Session, issue_key: str) -> None:
+    def mark_deleted(self, session: Session, incident_key: str) -> None:
         session.execute(
             update(Issue)
-            .where(Issue.issue_key == issue_key)
+            .where(Issue.incident_key == incident_key)
             .values(is_deleted=True, deleted_at=datetime.now(UTC))
         )
         session.execute(
             delete(IssueRelationship).where(
-                (IssueRelationship.source_issue_key == issue_key)
-                | (IssueRelationship.target_issue_key == issue_key)
+                (IssueRelationship.source_incident_key == incident_key)
+                | (IssueRelationship.target_incident_key == incident_key)
             )
         )
 
-    def purge(self, session: Session, issue_key: str) -> None:
+    def purge(self, session: Session, incident_key: str) -> None:
         """Erase all content and derived data (retention policy ``purge``).
 
         A content-free tombstone row is kept so that late, out-of-order events cannot re-create the issue.
         """
-        session.execute(delete(Analysis).where(Analysis.issue_key == issue_key))
-        session.execute(delete(IssueComment).where(IssueComment.issue_key == issue_key))
+        session.execute(delete(Analysis).where(Analysis.incident_key == incident_key))
+        session.execute(delete(IssueComment).where(IssueComment.incident_key == incident_key))
         session.execute(
             delete(IssueRelationship).where(
-                (IssueRelationship.source_issue_key == issue_key)
-                | (IssueRelationship.target_issue_key == issue_key)
+                (IssueRelationship.source_incident_key == incident_key)
+                | (IssueRelationship.target_incident_key == incident_key)
             )
         )
-        tombstone = JiraIssueSnapshot(issue_key=issue_key, deleted=True)
+        source, external_key = parse_incident_key(incident_key)
+        tombstone = IncidentSnapshot(source=source, external_key=external_key, deleted=True)
         session.execute(
             update(Issue)
-            .where(Issue.issue_key == issue_key)
+            .where(Issue.incident_key == incident_key)
             .values(
                 summary=None,
                 description=None,
@@ -139,12 +153,12 @@ class IssueRepository:
             )
         )
 
-    def latest_input_hash(self, session: Session, issue_key: str) -> str | None:
+    def latest_input_hash(self, session: Session, incident_key: str) -> str | None:
         return session.execute(
             select(Analysis.input_hash)
             # RUNNING/FAILED rows are in-flight or aborted attempts and must not suppress a retry.
             .where(
-                Analysis.issue_key == issue_key,
+                Analysis.incident_key == incident_key,
                 Analysis.status.in_(["COMPLETED", "PARTIAL", "NEEDS_REVIEW"]),
             )
             .order_by(Analysis.started_at.desc())
@@ -154,7 +168,7 @@ class IssueRepository:
     def find_candidates(
         self,
         session: Session,
-        issue_key: str,
+        incident_key: str,
         query_text: str,
         error_signature: str | None,
         lookback_days: int,
@@ -163,7 +177,7 @@ class IssueRepository:
         rows = session.execute(
             _CANDIDATES_SQL,
             {
-                "issue_key": issue_key,
+                "incident_key": incident_key,
                 "query": query_text[:2000],
                 "signature": error_signature,
                 "days": lookback_days,
@@ -172,7 +186,8 @@ class IssueRepository:
         ).all()
         return [
             CandidateIssue(
-                issue_key=r.issue_key,
+                incident_key=r.incident_key,
+                source=r.source,
                 summary=r.summary,
                 description_excerpt=r.description_excerpt,
                 category=r.category,
@@ -187,7 +202,7 @@ class IssueRepository:
         ]
 
     def count_signature_occurrences(
-        self, session: Session, issue_key: str, error_signature: str, window_days: int
+        self, session: Session, incident_key: str, error_signature: str, window_days: int
     ) -> int:
         """Number of non-deleted issues (including this one) sharing the signature within the window."""
         others = session.execute(
@@ -195,7 +210,7 @@ class IssueRepository:
             .select_from(Issue)
             .where(
                 Issue.error_signature == error_signature,
-                Issue.issue_key != issue_key,
+                Issue.incident_key != incident_key,
                 Issue.is_deleted.is_(False),
                 func.coalesce(Issue.source_created_at, Issue.created_at)
                 >= func.now() - func.make_interval(0, 0, 0, window_days),
@@ -213,15 +228,17 @@ class SessionBoundHistoryReader:
 
     def find_candidates(
         self,
-        issue_key: str,
+        incident_key: str,
         query_text: str,
         error_signature: str | None,
         lookback_days: int,
         limit: int,
     ) -> list[CandidateIssue]:
         with self._db.session() as s:
-            return self._repo.find_candidates(s, issue_key, query_text, error_signature, lookback_days, limit)
+            return self._repo.find_candidates(
+                s, incident_key, query_text, error_signature, lookback_days, limit
+            )
 
-    def count_signature_occurrences(self, issue_key: str, error_signature: str, window_days: int) -> int:
+    def count_signature_occurrences(self, incident_key: str, error_signature: str, window_days: int) -> int:
         with self._db.session() as s:
-            return self._repo.count_signature_occurrences(s, issue_key, error_signature, window_days)
+            return self._repo.count_signature_occurrences(s, incident_key, error_signature, window_days)

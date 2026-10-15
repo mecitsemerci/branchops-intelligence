@@ -1,8 +1,15 @@
 # Local development: mock model, dev auth, Postgres from `docker compose` (deploy/docker/compose.yaml).
 app: {environment: development, log_level: INFO}
 database: {url: "${DATABASE_URL:-postgresql+psycopg://branchops:branchops@localhost:55432/branchops}"}
-jira:
-  field_mapping: {branch_code: customfield_10101, application: customfield_10102}
+sources:
+  - {id: jira, type: jira_webhook, field_mapping: {branch_code: customfield_10101, application: customfield_10102}}
+  # `branchops import --source csv samples/csv/branch_incidents.csv`
+  - id: csv
+    type: csv_import
+    field_mapping: {summary: Konu, description: Açıklama, branch_code: Sube Kodu, application: Uygulama,
+                    status: Durum, priority: Öncelik, reporter: Bildiren, created_at: Oluşturma,
+                    updated_at: Güncelleme, group_key: Ekip}
+    options: {id_column: Kayıt No}
 llm: {provider: mock}
 workflow: {checkpointer: postgres}
 worker: {concurrency: 1, poll_interval_seconds: 1, health_port: 8081}

@@ -1,0 +1,11 @@
+{
+  "event": "update",
+  "table": "incident",
+  "sys_id": "9d385017c611228701d22104cc95c371",
+  "number": "INC0012345",
+  "state": "Çözüldü",
+  "priority": "3 - Orta",
+  "sys_updated_on": "2026-10-15 11:40:02",
+  "sys_updated_by": "mehmet.kaya",
+  "changed_fields": ["state", "priority"]
+}

@@ -37,8 +37,8 @@ class ReadModels:
     def list_issues(self, s: Session, f: IssueFilter) -> Page:
         return list_issues(s, f, low_quality_threshold=self.low_quality_threshold)
 
-    def issue_detail(self, s: Session, issue_key: str) -> dict[str, Any] | None:
-        return issue_detail(s, issue_key)
+    def issue_detail(self, s: Session, incident_key: str) -> dict[str, Any] | None:
+        return issue_detail(s, incident_key)
 
     def quality_analytics(self, s: Session, days: int = 90) -> dict[str, Any]:
         return quality_analytics(s, days=days, low_quality_threshold=self.low_quality_threshold)

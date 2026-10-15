@@ -242,7 +242,7 @@ class MockModelProvider:
     def _find_application(
         self, texts: list[tuple[str, str]], issue: dict[str, Any]
     ) -> tuple[str, str] | None:
-        mapped = (issue.get("jira_fields") or {}).get("application")
+        mapped = (issue.get("source_fields") or {}).get("application")
         if mapped:
             return mapped, "field:application"
         for source, text in texts:
@@ -354,7 +354,7 @@ class MockModelProvider:
                 rel = "UNRELATED"
             verdicts.append(
                 {
-                    "issue_key": c["issue_key"],
+                    "incident_key": c["incident_key"],
                     "relationship": rel,
                     "rationale": "Ortak sinyaller: "
                     + (", ".join(sorted(signals)) or "yok")

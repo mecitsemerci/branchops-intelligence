@@ -37,8 +37,10 @@ class WebhookInbox(Base):
     correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     raw_event_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    issue_key: Mapped[str | None] = mapped_column(String(64))
-    project_key: Mapped[str | None] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(40), nullable=False, server_default="jira")
+    # The source's own record key (``external_key``); per-incident ordering uses (source, issue_key).
+    issue_key: Mapped[str | None] = mapped_column(String(160))
+    group_key: Mapped[str | None] = mapped_column(String(120))
     event_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -60,16 +62,22 @@ class WebhookInbox(Base):
 
     __table_args__ = (
         Index("ix_inbox_claim", "status", "available_at"),
-        Index("ix_inbox_issue", "issue_key", "received_at"),
+        Index("ix_inbox_source_claim", "source", "status", "available_at"),
+        Index("ix_inbox_incident", "source", "issue_key", "received_at"),
     )
 
 
 class Issue(Base):
     __tablename__ = "issues"
 
-    issue_key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    issue_id: Mapped[str | None] = mapped_column(String(64))
-    project_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    # "<source>:<external_key>", e.g. "jira:OPS-123", "snow:INC0012345".
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, server_default="jira", index=True)
+    external_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    # Deprecated (one release): the pre-multi-source primary key, equal to ``external_key``.
+    issue_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    external_id: Mapped[str | None] = mapped_column(String(64))
+    group_key: Mapped[str | None] = mapped_column(String(120), index=True)
     summary: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str | None] = mapped_column(String(80))
@@ -101,7 +109,10 @@ class Issue(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    __table_args__ = (Index("ix_issues_search", "search_vector", postgresql_using="gin"),)
+    __table_args__ = (
+        Index("ix_issues_search", "search_vector", postgresql_using="gin"),
+        UniqueConstraint("source", "external_key", name="uq_issues_source_external"),
+    )
 
 
 class Analysis(Base):
@@ -110,7 +121,9 @@ class Analysis(Base):
     __tablename__ = "analyses"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    issue_key: Mapped[str] = mapped_column(String(64), ForeignKey("issues.issue_key", ondelete="CASCADE"))
+    incident_key: Mapped[str] = mapped_column(
+        String(200), ForeignKey("issues.incident_key", ondelete="CASCADE")
+    )
     inbox_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -150,7 +163,7 @@ class Analysis(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
-        Index("ix_analyses_issue_started", "issue_key", "started_at"),
+        Index("ix_analyses_incident_started", "incident_key", "started_at"),
         Index("ix_analyses_status", "status"),
         Index("ix_analyses_started", "started_at"),
     )
@@ -178,8 +191,8 @@ class AgentStep(Base):
 class IssueComment(Base):
     __tablename__ = "issue_comments"
 
-    issue_key: Mapped[str] = mapped_column(
-        String(64), ForeignKey("issues.issue_key", ondelete="CASCADE"), primary_key=True
+    incident_key: Mapped[str] = mapped_column(
+        String(200), ForeignKey("issues.incident_key", ondelete="CASCADE"), primary_key=True
     )
     comment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -193,11 +206,11 @@ class IssueRelationship(Base):
     __tablename__ = "issue_relationships"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source_issue_key: Mapped[str] = mapped_column(
-        String(64), ForeignKey("issues.issue_key", ondelete="CASCADE"), nullable=False
+    source_incident_key: Mapped[str] = mapped_column(
+        String(200), ForeignKey("issues.incident_key", ondelete="CASCADE"), nullable=False
     )
-    target_issue_key: Mapped[str] = mapped_column(
-        String(64), ForeignKey("issues.issue_key", ondelete="CASCADE"), nullable=False
+    target_incident_key: Mapped[str] = mapped_column(
+        String(200), ForeignKey("issues.incident_key", ondelete="CASCADE"), nullable=False
     )
     relationship_type: Mapped[str] = mapped_column(String(40), nullable=False)
     text_rank: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
@@ -211,8 +224,20 @@ class IssueRelationship(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("source_issue_key", "target_issue_key", name="uq_relationship_pair"),
-        Index("ix_rel_target", "target_issue_key"),
+        UniqueConstraint("source_incident_key", "target_incident_key", name="uq_relationship_pair"),
+        Index("ix_rel_target", "target_incident_key"),
+    )
+
+
+class SourceCheckpoint(Base):
+    """Progress cursor of a pull source (``branchops poll``)."""
+
+    __tablename__ = "source_checkpoints"
+
+    source_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    cursor: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
 

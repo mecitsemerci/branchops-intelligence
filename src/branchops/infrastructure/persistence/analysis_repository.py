@@ -33,7 +33,7 @@ class AnalysisRepository:
         )
         values: dict[str, Any] = {
             "id": analysis_id,
-            "issue_key": result.issue_key,
+            "incident_key": result.incident_key,
             "inbox_event_id": uuid.UUID(result.inbox_event_id) if result.inbox_event_id else None,
             "correlation_id": result.correlation_id,
             "status": result.status.value,
@@ -102,25 +102,25 @@ class AnalysisRepository:
         analysis_id = uuid.UUID(result.analysis_id)
         existing_keys = set(
             session.execute(
-                select(Issue.issue_key).where(
-                    Issue.issue_key.in_([s.issue_key for s in result.similar_issues])
+                select(Issue.incident_key).where(
+                    Issue.incident_key.in_([s.incident_key for s in result.similar_issues])
                 )
             ).scalars()
         )
         for s in result.similar_issues:
-            if s.issue_key not in existing_keys:
+            if s.incident_key not in existing_keys:
                 continue
             if s.relationship is RelationshipType.UNRELATED:
                 session.execute(
                     delete(IssueRelationship).where(
-                        IssueRelationship.source_issue_key == result.issue_key,
-                        IssueRelationship.target_issue_key == s.issue_key,
+                        IssueRelationship.source_incident_key == result.incident_key,
+                        IssueRelationship.target_incident_key == s.incident_key,
                     )
                 )
                 continue
             values = {
-                "source_issue_key": result.issue_key,
-                "target_issue_key": s.issue_key,
+                "source_incident_key": result.incident_key,
+                "target_incident_key": s.incident_key,
                 "relationship_type": s.relationship.value,
                 "text_rank": s.text_rank,
                 "signals": s.deterministic_signals,
@@ -136,7 +136,7 @@ class AnalysisRepository:
                     set_={
                         k: stmt.excluded[k]
                         for k in values
-                        if k not in ("source_issue_key", "target_issue_key")
+                        if k not in ("source_incident_key", "target_incident_key")
                     },
                 )
             )
@@ -146,14 +146,14 @@ class AnalysisRepository:
         latest_started = session.execute(
             select(Analysis.started_at)
             .join(Issue, Issue.latest_analysis_id == Analysis.id)
-            .where(Issue.issue_key == result.issue_key)
+            .where(Issue.incident_key == result.incident_key)
         ).scalar_one_or_none()
         if latest_started is not None and latest_started > result.started_at:
             return  # a newer analysis already owns the denormalised columns
         scores = result.scores
         session.execute(
             update(Issue)
-            .where(Issue.issue_key == result.issue_key)
+            .where(Issue.incident_key == result.incident_key)
             .values(
                 latest_analysis_id=uuid.UUID(result.analysis_id),
                 latest_completeness=scores.completeness_score if scores else None,

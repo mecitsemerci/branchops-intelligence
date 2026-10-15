@@ -24,7 +24,7 @@ AGENT_NAME = "similarity"
 
 
 class IssueFingerprint(BaseModel):
-    issue_key: str
+    incident_key: str
     summary: str | None
     error_details: str | None
     category: str | None
@@ -90,19 +90,20 @@ def shortlist(
                 len(signals),
                 c.text_rank,
                 SimilarIssue(
-                    issue_key=c.issue_key,
+                    incident_key=c.incident_key,
+                    source=c.source,
                     summary=c.summary,
                     text_rank=round(c.text_rank, 4),
                     deterministic_signals=signals,
                 ),
             )
         )
-    scored.sort(key=lambda t: (-t[0], -t[1], t[2].issue_key))
+    scored.sort(key=lambda t: (-t[0], -t[1], t[2].incident_key))
     return [s for _, _, s in scored[:top_n]]
 
 
 class VerdictOutput(BaseModel):
-    issue_key: str
+    incident_key: str
     relationship: Literal["DUPLICATE_CANDIDATE", "RELATED", "UNRELATED"]
     rationale: str = Field(default="", max_length=400, description="one or two sentences in Turkish")
     evidence: list[EvidenceQuote] = Field(default_factory=list, max_length=2)
@@ -118,14 +119,14 @@ class SimilarityOutput(BaseModel):
         if allowed is not None:
             # Verdicts about anything but the shortlisted candidates (e.g. the current issue itself) are
             # dropped rather than failing the whole step; missing verdicts stay UNVERIFIED_CANDIDATE.
-            self.verdicts = [v for v in self.verdicts if v.issue_key in allowed]
+            self.verdicts = [v for v in self.verdicts if v.incident_key in allowed]
         return self
 
 
 def constrained_schema(candidate_keys: tuple[str, ...]) -> type[SimilarityOutput]:
-    """Schema whose ``issue_key`` enumerates the shortlisted candidates (grammar-constrained decoding)."""
+    """Schema whose ``incident_key`` enumerates the shortlisted candidates (grammar-constrained decoding)."""
     key_type: Any = Literal[candidate_keys]  # type: ignore[valid-type]
-    verdict: Any = create_model("VerdictOutput", __base__=VerdictOutput, issue_key=(key_type, ...))
+    verdict: Any = create_model("VerdictOutput", __base__=VerdictOutput, incident_key=(key_type, ...))
     model: type[SimilarityOutput] = create_model(
         "SimilarityOutput", __base__=SimilarityOutput, verdicts=(list[verdict], ...)
     )
@@ -164,13 +165,13 @@ class SimilarityAgent:
             "current": current.model_dump(mode="json", exclude={"error_signature"}),
             "candidates": [
                 {
-                    "issue_key": s.issue_key,
-                    "summary": candidates[s.issue_key].summary,
-                    "description_excerpt": candidates[s.issue_key].description_excerpt,
-                    "application": candidates[s.issue_key].application,
-                    "branch_code": candidates[s.issue_key].branch_code,
-                    "category": candidates[s.issue_key].category,
-                    "created": candidates[s.issue_key].created_at,
+                    "incident_key": s.incident_key,
+                    "summary": candidates[s.incident_key].summary,
+                    "description_excerpt": candidates[s.incident_key].description_excerpt,
+                    "application": candidates[s.incident_key].application,
+                    "branch_code": candidates[s.incident_key].branch_code,
+                    "category": candidates[s.incident_key].category,
+                    "created": candidates[s.incident_key].created_at,
                     "shared_signals": s.deterministic_signals,
                 }
                 for s in shortlisted
@@ -180,15 +181,15 @@ class SimilarityAgent:
             agent=AGENT_NAME,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=json_block("candidates", payload),
-            schema=constrained_schema(tuple(sorted(s.issue_key for s in shortlisted))),
+            schema=constrained_schema(tuple(sorted(s.incident_key for s in shortlisted))),
             correlation_id=correlation_id,
-            validation_context={"candidates": {s.issue_key for s in shortlisted}},
+            validation_context={"candidates": {s.incident_key for s in shortlisted}},
             deadline=deadline,
         )
-        verdicts = {v.issue_key: v for v in result.value.verdicts}
+        verdicts = {v.incident_key: v for v in result.value.verdicts}
         verified: list[SimilarIssue] = []
         for s in shortlisted:
-            v = verdicts.get(s.issue_key)
+            v = verdicts.get(s.incident_key)
             if v is None:
                 verified.append(s)
                 continue

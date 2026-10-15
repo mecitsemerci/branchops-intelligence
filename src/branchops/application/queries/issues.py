@@ -1,4 +1,4 @@
-"""Issue explorer listing and single-issue detail."""
+"""Incident explorer listing and single-incident detail."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from branchops.application.queries._common import _analysis_dict, _r
 from branchops.application.queries.filters import IssueFilter, Page
+from branchops.domain.entities.incident import incident_key as make_incident_key
+from branchops.domain.entities.incident import parse_incident_key
 from branchops.infrastructure.database.models import Analysis, Issue, IssueComment, IssueRelationship
 
 
@@ -18,10 +20,12 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
         term = f.search.strip()[:200]
         conditions.append(
             or_(
-                Issue.issue_key.ilike(f"%{term}%"),
+                Issue.incident_key.ilike(f"%{term}%"),
                 Issue.search_vector.op("@@")(func.websearch_to_tsquery("turkish", term)),
             )
         )
+    if f.source:
+        conditions.append(Issue.source == f.source)
     if f.category:
         conditions.append(Issue.category == f.category)
     if f.branch_code:
@@ -36,7 +40,8 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
         "updated": func.coalesce(Issue.source_updated_at, Issue.updated_at),
         "quality": Issue.latest_quality,
         "completeness": Issue.latest_completeness,
-        "issue_key": Issue.issue_key,
+        "incident_key": Issue.incident_key,
+        "issue_key": Issue.incident_key,  # legacy name
     }[f.sort]
     order = sort_col.desc().nulls_last() if f.descending else sort_col.asc().nulls_last()
     total = s.execute(select(func.count()).select_from(Issue).where(and_(*conditions))).scalar_one()
@@ -44,7 +49,9 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
     page = max(1, f.page)
     rows = s.execute(
         select(
-            Issue.issue_key,
+            Issue.incident_key,
+            Issue.source,
+            Issue.external_key,
             Issue.summary,
             Issue.status,
             Issue.category,
@@ -57,15 +64,19 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
             Issue.source_updated_at,
         )
         .where(and_(*conditions))
-        .order_by(order, Issue.issue_key)
+        .order_by(order, Issue.incident_key)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
     items = [
         {
-            "issue_key": r.issue_key,
+            "incident_key": r.incident_key,
+            "source": r.source,
+            "external_key": r.external_key,
+            "issue_key": r.external_key,  # deprecated: use incident_key / external_key
             "summary": r.summary,
-            "jira_status": r.status,
+            "source_status": r.status,
+            "jira_status": r.status,  # deprecated: use source_status
             "category": r.category,
             "subcategory": r.subcategory,
             "branch_code": r.branch_code,
@@ -80,8 +91,10 @@ def list_issues(s: Session, f: IssueFilter, *, low_quality_threshold: float) -> 
     return Page(items=items, total=int(total), page=page, page_size=page_size)
 
 
-def issue_detail(s: Session, issue_key: str) -> dict[str, Any] | None:
-    issue = s.get(Issue, issue_key)
+def issue_detail(s: Session, incident_key: str) -> dict[str, Any] | None:
+    """``incident_key`` like ``snow:INC0012345``; a bare legacy key (``OPS-123``) means Jira."""
+    key = make_incident_key(*parse_incident_key(incident_key))
+    issue = s.get(Issue, key)
     if issue is None or issue.is_deleted:
         return None
     latest = s.get(Analysis, issue.latest_analysis_id) if issue.latest_analysis_id else None
@@ -97,23 +110,23 @@ def issue_detail(s: Session, issue_key: str) -> dict[str, Any] | None:
             Analysis.scoring_policy_version,
             Analysis.model_id,
         )
-        .where(Analysis.issue_key == issue_key)
+        .where(Analysis.incident_key == key)
         .order_by(Analysis.started_at)
     ).all()
     relationships = s.execute(
-        select(IssueRelationship, Issue.summary)
+        select(IssueRelationship, Issue.summary, Issue.source, Issue.external_key)
         .join(
             Issue,
-            Issue.issue_key
+            Issue.incident_key
             == func.coalesce(
-                func.nullif(IssueRelationship.target_issue_key, issue_key),
-                IssueRelationship.source_issue_key,
+                func.nullif(IssueRelationship.target_incident_key, key),
+                IssueRelationship.source_incident_key,
             ),
         )
         .where(
             or_(
-                IssueRelationship.source_issue_key == issue_key,
-                IssueRelationship.target_issue_key == issue_key,
+                IssueRelationship.source_incident_key == key,
+                IssueRelationship.target_incident_key == key,
             ),
             Issue.is_deleted.is_(False),
         )
@@ -121,16 +134,21 @@ def issue_detail(s: Session, issue_key: str) -> dict[str, Any] | None:
     ).all()
     comments = s.execute(
         select(IssueComment)
-        .where(IssueComment.issue_key == issue_key, IssueComment.is_deleted.is_(False))
+        .where(IssueComment.incident_key == key, IssueComment.is_deleted.is_(False))
         .order_by(IssueComment.created_at)
     ).scalars()
     return {
         "issue": {
-            "issue_key": issue.issue_key,
-            "project_key": issue.project_key,
+            "incident_key": issue.incident_key,
+            "source": issue.source,
+            "external_key": issue.external_key,
+            "group_key": issue.group_key,
+            "issue_key": issue.external_key,  # deprecated: use incident_key / external_key
+            "project_key": issue.group_key,  # deprecated: use group_key
             "summary": issue.summary,
             "description": issue.description,
-            "jira_status": issue.status,
+            "source_status": issue.status,
+            "jira_status": issue.status,  # deprecated: use source_status
             "category": issue.category,
             "subcategory": issue.subcategory,
             "branch_code": issue.branch_code,
@@ -163,16 +181,18 @@ def issue_detail(s: Session, issue_key: str) -> dict[str, Any] | None:
         ],
         "relationships": [
             {
-                "issue_key": rel.target_issue_key
-                if rel.source_issue_key == issue_key
-                else rel.source_issue_key,
+                "incident_key": rel.target_incident_key
+                if rel.source_incident_key == key
+                else rel.source_incident_key,
+                "source": source,
+                "issue_key": external_key,  # deprecated: use incident_key
                 "summary": summary,
                 "relationship": rel.relationship_type,
                 "text_rank": rel.text_rank,
                 "signals": rel.signals,
                 "rationale": rel.rationale,
-                "direction": "outgoing" if rel.source_issue_key == issue_key else "incoming",
+                "direction": "outgoing" if rel.source_incident_key == key else "incoming",
             }
-            for rel, summary in relationships
+            for rel, summary, source, external_key in relationships
         ],
     }

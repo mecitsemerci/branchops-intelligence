@@ -78,18 +78,20 @@ def register(ctx: DashboardContext) -> None:
                         _table(
                             data["improvements"],
                             [
-                                ("issue_key", "Kayıt"),
+                                ("incident_key", "Kayıt"),
                                 ("first_quality", "İlk kalite"),
                                 ("last_quality", "Son kalite"),
                                 ("quality_delta", "Fark"),
                                 ("first_completeness", "İlk tamlık"),
                                 ("last_completeness", "Son tamlık"),
                             ],
-                            "issue_key",
+                            "incident_key",
                         )
                     with ui.card().classes("w-full"):
                         ui.label("Tekrarlayan sorunlar (aynı hata imzası)").classes("font-semibold")
-                        rows = [{**r, "issue_keys": ", ".join(r["issue_keys"])} for r in data["recurring"]]
+                        rows = [
+                            {**r, "incident_keys": ", ".join(r["incident_keys"])} for r in data["recurring"]
+                        ]
                         _table(
                             rows,
                             [
@@ -98,7 +100,8 @@ def register(ctx: DashboardContext) -> None:
                                 ("branches", "Şube sayısı"),
                                 ("first_seen", "İlk"),
                                 ("last_seen", "Son"),
-                                ("issue_keys", "Kayıtlar"),
+                                ("sources", "Kaynak sayısı"),
+                                ("incident_keys", "Kayıtlar"),
                             ],
                             "error_signature",
                         )

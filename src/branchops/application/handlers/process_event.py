@@ -1,4 +1,4 @@
-"""Handler: apply one inbox event to the issue state and run the analysis workflow when needed."""
+"""Handler: apply one inbox event to the incident state and run the analysis workflow when needed."""
 
 from __future__ import annotations
 
@@ -12,13 +12,17 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from branchops.application.interfaces.source_adapter import (
+    SourcePayloadError,
+    SourceRegistry,
+    UnknownSourceError,
+)
 from branchops.config.settings import Settings
-from branchops.domain.entities.jira import JiraIssueSnapshot
-from branchops.domain.enums import InboxStatus, JiraEventType
+from branchops.domain.entities.incident import IncidentSnapshot
+from branchops.domain.enums import InboxStatus, IncidentEventType
 from branchops.domain.services.masking import SensitiveDataMasker
 from branchops.domain.services.snapshot_merge import merge_event
 from branchops.infrastructure.database.session import Database
-from branchops.infrastructure.jira.adapter import JiraPayloadError, JiraWebhookAdapter
 from branchops.infrastructure.persistence.audit import audit
 from branchops.infrastructure.persistence.inbox_repository import InboxItem
 from branchops.infrastructure.persistence.issue_repository import IssueRepository
@@ -30,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class IssueBusyError(Exception):
-    """Another worker currently holds the per-issue lock."""
+    """Another worker currently holds the per-incident lock."""
 
 
 class NonRetryableEventError(Exception):
@@ -56,7 +60,7 @@ def mask_json(value: Any, masker: SensitiveDataMasker) -> Any:
 
 
 def analysis_input_hash(
-    snapshot: JiraIssueSnapshot, registry: TemplateRegistry, settings: Settings, model_id: str
+    snapshot: IncidentSnapshot, registry: TemplateRegistry, settings: Settings, model_id: str
 ) -> str:
     content = {
         "summary": snapshot.summary,
@@ -84,28 +88,33 @@ class EventProcessor:
         settings: Settings,
         registry: TemplateRegistry,
         workflow: IssueAnalysisWorkflow,
-        adapter: JiraWebhookAdapter | None = None,
+        sources: SourceRegistry | None = None,
         masker: SensitiveDataMasker | None = None,
     ) -> None:
         self._db = db
         self._settings = settings
         self._registry = registry
         self._workflow = workflow
-        self._adapter = adapter or JiraWebhookAdapter(settings.jira.field_mapping)
+        if sources is None:
+            from branchops.infrastructure.sources import build_source_registry
+
+            sources = build_source_registry(settings)
+        self._sources = sources
         self._masker = masker or SensitiveDataMasker(settings.security.masking_extra_patterns)
         self._issues = IssueRepository()
 
     def process(self, item: InboxItem) -> ProcessOutcome:
-        if item.issue_key is None:
-            return ProcessOutcome(InboxStatus.SKIPPED, "event without issue key")
+        incident_key = item.incident_key
+        if incident_key is None:
+            return ProcessOutcome(InboxStatus.SKIPPED, "event without record key")
         with self._db.engine.connect() as lock_conn:
-            lock_id = lock_conn.execute(select(func.hashtextextended(item.issue_key, 0))).scalar_one()
+            lock_id = lock_conn.execute(select(func.hashtextextended(incident_key, 0))).scalar_one()
             acquired = lock_conn.execute(select(func.pg_try_advisory_lock(lock_id))).scalar_one()
             lock_conn.commit()
             if not acquired:
-                raise IssueBusyError(item.issue_key)
+                raise IssueBusyError(incident_key)
             try:
-                return self._process_locked(item, item.issue_key)
+                return self._process_locked(item, incident_key)
             finally:
                 lock_conn.execute(select(func.pg_advisory_unlock(lock_id)))
                 lock_conn.commit()
@@ -115,22 +124,29 @@ class EventProcessor:
             return None
         return mask_json(item.payload, self._masker)  # type: ignore[no-any-return]
 
-    def _process_locked(self, item: InboxItem, issue_key: str) -> ProcessOutcome:
-        event_type = JiraEventType(item.event_type)
-        manual = event_type is JiraEventType.MANUAL_REANALYSIS
+    def _process_locked(self, item: InboxItem, incident_key: str) -> ProcessOutcome:
+        event_type = IncidentEventType(item.event_type)
+        manual = event_type is IncidentEventType.MANUAL_REANALYSIS
 
         if manual:
             with self._db.session() as session:
-                snapshot = self._issues.get_snapshot(session, issue_key)
+                snapshot = self._issues.get_snapshot(session, incident_key)
             if snapshot is None or snapshot.deleted:
                 return ProcessOutcome(InboxStatus.SKIPPED, "manual re-analysis of unknown/deleted issue")
         else:
             try:
-                event = self._adapter.normalize(item.payload, transform=lambda t: self._masker.mask(t).text)
-            except JiraPayloadError as exc:
+                adapter = self._sources.get(item.source)
+                event = adapter.normalize(item.payload, transform=lambda t: self._masker.mask(t).text)
+            except UnknownSourceError as exc:
+                raise NonRetryableEventError(f"source not enabled: {exc}") from exc
+            except SourcePayloadError as exc:
                 raise NonRetryableEventError(f"invalid payload: {exc}") from exc
+            if event.incident_key != incident_key:
+                raise NonRetryableEventError(
+                    f"payload key {event.incident_key} does not match {incident_key}"
+                )
             with self._db.session() as session:
-                current = self._issues.lock_snapshot(session, issue_key)
+                current = self._issues.lock_snapshot(session, incident_key)
                 merged = merge_event(
                     current, event, redact_deleted_comments=self._settings.retention.redact_deleted_comments
                 )
@@ -138,12 +154,12 @@ class EventProcessor:
                 # Persist any mutation (incl. tombstones and version bumps), not only content changes.
                 if current is None or snapshot.model_dump(mode="json") != current.model_dump(mode="json"):
                     self._issues.save_snapshot(session, snapshot)
-                if event_type is JiraEventType.ISSUE_DELETED:
-                    return self._apply_deletion(session, item, issue_key)
+                if event_type is IncidentEventType.RECORD_DELETED:
+                    return self._apply_deletion(session, item, incident_key)
                 if merged.ignored_stale and not merged.applied:
                     logger.info(
                         "stale event ignored",
-                        extra={"issue_key": issue_key, "fields": ",".join(merged.ignored_stale)},
+                        extra={"incident_key": incident_key, "fields": ",".join(merged.ignored_stale)},
                     )
 
         if snapshot.deleted:
@@ -161,7 +177,7 @@ class EventProcessor:
         input_hash = analysis_input_hash(snapshot, self._registry, self._settings, self._workflow.model_id)
         if not manual:
             with self._db.session() as session:
-                latest_hash = self._issues.latest_input_hash(session, issue_key)
+                latest_hash = self._issues.latest_input_hash(session, incident_key)
             # The hash covers all analysis-relevant content, so a retried event whose snapshot was
             # already merged by an earlier attempt is still analysed.
             if latest_hash == input_hash:
@@ -174,7 +190,7 @@ class EventProcessor:
         analysis_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"branchops:{item.id}:{input_hash}"))
         initial: AnalysisState = {
             "analysis_id": analysis_id,
-            "issue_key": issue_key,
+            "incident_key": incident_key,
             "correlation_id": item.correlation_id,
             "inbox_event_id": str(item.id),
             "input_hash": input_hash,
@@ -194,18 +210,18 @@ class EventProcessor:
             redacted_payload=self._redacted(item),
         )
 
-    def _apply_deletion(self, session: Any, item: InboxItem, issue_key: str) -> ProcessOutcome:
+    def _apply_deletion(self, session: Any, item: InboxItem, incident_key: str) -> ProcessOutcome:
         policy = self._settings.retention.on_issue_deleted
         if policy == "purge":
-            self._issues.purge(session, issue_key)
+            self._issues.purge(session, incident_key)
         else:
-            self._issues.mark_deleted(session, issue_key)
+            self._issues.mark_deleted(session, incident_key)
         audit(
             session,
-            actor="jira-webhook",
+            actor="jira-webhook" if item.source == "jira" else f"source:{item.source}",
             action=f"issue_deleted:{policy}",
             resource_type="issue",
-            resource_id=issue_key,
+            resource_id=incident_key,
             details={"inbox_event_id": str(item.id)},
         )
         return ProcessOutcome(

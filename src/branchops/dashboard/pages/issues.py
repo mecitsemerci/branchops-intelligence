@@ -1,4 +1,4 @@
-"""Issue Explorer and Issue Detail pages."""
+"""Incident Explorer and Incident Detail pages (all sources)."""
 
 from __future__ import annotations
 
@@ -15,19 +15,22 @@ from branchops.dashboard.components.layout import (
     STATE_COLORS,
     authorize,
     frame,
+    issue_url,
     kpi,
     load,
     score_color,
     status_badge,
 )
 from branchops.dashboard.context import DashboardContext
+from branchops.domain.entities.incident import incident_key as make_incident_key
+from branchops.domain.entities.incident import is_valid_incident_key, parse_incident_key
 from branchops.domain.entities.issue import FIELD_LABELS_TR
 from branchops.domain.enums import Role
-from branchops.infrastructure.jira.adapter import ISSUE_KEY_RE
 from branchops.infrastructure.persistence.audit import audit
 
 ISSUE_COLUMNS = [
-    {"name": "issue_key", "label": "Kayıt", "field": "issue_key", "align": "left"},
+    {"name": "incident_key", "label": "Kayıt", "field": "incident_key", "align": "left"},
+    {"name": "source", "label": "Kaynak", "field": "source"},
     {"name": "summary", "label": "Özet", "field": "summary", "align": "left", "classes": "max-w-md truncate"},
     {"name": "category", "label": "Kategori", "field": "category", "align": "left"},
     {"name": "branch_code", "label": "Şube", "field": "branch_code"},
@@ -47,9 +50,11 @@ def register(ctx: DashboardContext) -> None:
             return
         state: dict[str, Any] = {"page": 1}
         categories = sorted(ctx.registry.taxonomy())
+        sources = [s.id for s in ctx.settings.sources]
         with frame(ctx, principal, "Kayıt Gezgini"):
             with ui.row().classes("items-end gap-3 flex-wrap"):
                 search = ui.input("Ara (anahtar / metin)").classes("w-64")
+                source = ui.select([None, *sources], label="Kaynak", value=None).classes("w-36")
                 category = ui.select([None, *categories], label="Kategori", value=None).classes("w-48")
                 branch = ui.input("Şube kodu").classes("w-32")
                 application = ui.input("Uygulama").classes("w-48")
@@ -63,15 +68,15 @@ def register(ctx: DashboardContext) -> None:
                         "updated": "Güncelleme",
                         "quality": "Kalite",
                         "completeness": "Tamlık",
-                        "issue_key": "Kayıt",
+                        "incident_key": "Kayıt",
                     },
                     value="updated",
                     label="Sırala",
                 ).classes("w-36")
                 descending = ui.checkbox("Azalan", value=True)
                 low_only = ui.checkbox("Sadece düşük kalite")
-            table = ui.table(columns=ISSUE_COLUMNS, rows=[], row_key="issue_key").classes("w-full")
-            table.on("rowClick", lambda e: ui.navigate.to(f"/issues/{e.args[1]['issue_key']}"))
+            table = ui.table(columns=ISSUE_COLUMNS, rows=[], row_key="incident_key").classes("w-full")
+            table.on("rowClick", lambda e: ui.navigate.to(issue_url(e.args[1]["incident_key"])))
             with ui.row().classes("items-center gap-2"):
                 prev_btn = ui.button(icon="chevron_left").props("flat")
                 page_label = ui.label()
@@ -82,6 +87,7 @@ def register(ctx: DashboardContext) -> None:
                     state["page"] = 1
                 f = IssueFilter(
                     search=search.value or None,
+                    source=source.value,
                     category=category.value,
                     branch_code=branch.value or None,
                     application=application.value or None,
@@ -107,24 +113,25 @@ def register(ctx: DashboardContext) -> None:
 
             prev_btn.on_click(lambda: go(-1))
             next_btn.on_click(lambda: go(1))
-            for el in (category, status, sort, descending, low_only):
+            for el in (source, category, status, sort, descending, low_only):
                 el.on_value_change(lambda: refresh(reset=True))
             for text_input in (search, branch, application):
                 text_input.on("keydown.enter", lambda: refresh(reset=True))
             ui.button("Filtrele", icon="filter_alt", on_click=lambda: refresh(reset=True))
             await refresh()
 
-    @ui.page("/issues/{issue_key}")
-    async def detail_page(request: Request, issue_key: str) -> None:
+    @ui.page("/issues/{raw_key:path}")
+    async def detail_page(request: Request, raw_key: str) -> None:
         principal = authorize(ctx, request)
         if principal is None:
             return
-        if not ISSUE_KEY_RE.match(issue_key):
+        if not is_valid_incident_key(raw_key):
             ui.label("Geçersiz kayıt anahtarı").classes("text-negative")
             return
-        detail = await load(lambda: ctx.query(lambda s: ctx.read.issue_detail(s, issue_key)))
+        incident_key = make_incident_key(*parse_incident_key(raw_key))
+        detail = await load(lambda: ctx.query(lambda s: ctx.read.issue_detail(s, incident_key)))
         threshold = ctx.settings.scoring.low_quality_threshold
-        with frame(ctx, principal, f"{issue_key}"):
+        with frame(ctx, principal, f"{incident_key}"):
             if detail is None:
                 ui.label("Kayıt bulunamadı.")
                 return
@@ -144,10 +151,10 @@ def register(ctx: DashboardContext) -> None:
                                     actor=principal.username,
                                     action="reanalysis_requested",
                                     resource_type="issue",
-                                    resource_id=issue_key,
+                                    resource_id=incident_key,
                                 )
                             return RequestReanalysis(ctx.db, ctx.settings).execute(
-                                issue_key, requested_by=principal.username, correlation_id=uuid.uuid4().hex
+                                incident_key, requested_by=principal.username, correlation_id=uuid.uuid4().hex
                             )
 
                         await load(enqueue)
@@ -196,7 +203,8 @@ def register(ctx: DashboardContext) -> None:
                     _recommendations_panel(analysis)
                 with ui.tab_panel(t_original):
                     ui.label(
-                        f"Durum: {issue['jira_status']} · Proje: {issue['project_key']} · "
+                        f"Kaynak: {issue['source']} · Durum: {issue['source_status']} · "
+                        f"Grup: {issue['group_key']} · "
                         f"Oluşturma: {issue['source_created_at']}"
                     ).classes("text-sm text-slate-500")
                     ui.label(issue["description"] or "").classes("whitespace-pre-wrap")
@@ -325,7 +333,7 @@ def _similar_panel(relationships: list[dict[str, Any]], analysis: dict[str, Any]
         "text-xs text-slate-500"
     )
     cols = [
-        {"name": "issue_key", "label": "Kayıt", "field": "issue_key", "align": "left"},
+        {"name": "incident_key", "label": "Kayıt", "field": "incident_key", "align": "left"},
         {"name": "summary", "label": "Özet", "field": "summary", "align": "left"},
         {"name": "relationship", "label": "İlişki", "field": "relationship"},
         {"name": "signals", "label": "Sinyaller", "field": "signals", "align": "left"},
@@ -338,5 +346,5 @@ def _similar_panel(relationships: list[dict[str, Any]], analysis: dict[str, Any]
         },
     ]
     rows = [{**r, "signals": ", ".join(r.get("signals") or [])} for r in relationships]
-    table = ui.table(columns=cols, rows=rows, row_key="issue_key").classes("w-full")
-    table.on("rowClick", lambda e: ui.navigate.to(f"/issues/{e.args[1]['issue_key']}"))
+    table = ui.table(columns=cols, rows=rows, row_key="incident_key").classes("w-full")
+    table.on("rowClick", lambda e: ui.navigate.to(issue_url(e.args[1]["incident_key"])))

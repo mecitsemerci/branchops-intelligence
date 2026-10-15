@@ -45,8 +45,8 @@ from branchops.domain.entities.analysis import (
     SimilarIssue,
     StepRecord,
 )
+from branchops.domain.entities.incident import IncidentSnapshot
 from branchops.domain.entities.issue import CanonicalIssue
-from branchops.domain.entities.jira import JiraIssueSnapshot
 from branchops.domain.enums import AnalysisStatus, RelationshipType, StepStatus
 from branchops.domain.services.prompt_injection import detect_prompt_injection
 from branchops.domain.services.signatures import error_signature
@@ -199,7 +199,7 @@ class IssueAnalysisWorkflow:
         self._progress.run_started(
             RunInfo(
                 analysis_id=initial["analysis_id"],
-                issue_key=initial["issue_key"],
+                incident_key=initial["incident_key"],
                 correlation_id=initial["correlation_id"],
                 inbox_event_id=initial.get("inbox_event_id"),
                 input_hash=initial["input_hash"],
@@ -211,7 +211,7 @@ class IssueAnalysisWorkflow:
             )
         )
         with tracer().start_as_current_span("workflow.issue_analysis") as span:
-            span.set_attribute("branchops.issue_key", initial.get("issue_key", ""))
+            span.set_attribute("branchops.incident_key", initial.get("incident_key", ""))
             span.set_attribute("branchops.correlation_id", initial.get("correlation_id", ""))
             try:
                 final: AnalysisState = self.graph.invoke(inputs, config)  # type: ignore[assignment]
@@ -264,8 +264,8 @@ class IssueAnalysisWorkflow:
         return value, record, None
 
     @staticmethod
-    def _snapshot(state: AnalysisState) -> JiraIssueSnapshot:
-        return JiraIssueSnapshot.model_validate(state["snapshot"])
+    def _snapshot(state: AnalysisState) -> IncidentSnapshot:
+        return IncidentSnapshot.model_validate(state["snapshot"])
 
     # --- nodes ----------------------------------------------------------------------------------
 
@@ -406,7 +406,7 @@ class IssueAnalysisWorkflow:
         canonical = CanonicalIssue.model_validate(state["canonical"])
         signature = error_signature(canonical.value("application"), canonical.value("error_details"))
         current = IssueFingerprint(
-            issue_key=canonical.issue_key,
+            incident_key=canonical.incident_key,
             summary=canonical.value("summary"),
             error_details=canonical.value("error_details"),
             category=canonical.value("category"),
@@ -421,7 +421,7 @@ class IssueAnalysisWorkflow:
         )
         timer = _StepTimer("similarity.retrieve")
         candidates = self._history.find_candidates(
-            canonical.issue_key, query, signature, cfg.lookback_days, cfg.candidate_limit
+            canonical.incident_key, query, signature, cfg.lookback_days, cfg.candidate_limit
         )
         short = shortlist(
             current,
@@ -431,7 +431,7 @@ class IssueAnalysisWorkflow:
             duplicate_window=timedelta(hours=cfg.duplicate_window_hours),
         )
         retrieve_record = timer.record(StepStatus.SUCCEEDED)
-        by_key = {c.issue_key: c for c in candidates}
+        by_key = {c.incident_key: c for c in candidates}
 
         def call() -> tuple[list[SimilarIssue], Any]:
             verified, result = self._similarity.verify(
@@ -448,7 +448,7 @@ class IssueAnalysisWorkflow:
         recurring_count = 1
         if signature:
             recurring_count = self._history.count_signature_occurrences(
-                canonical.issue_key, signature, cfg.recurring_window_days
+                canonical.incident_key, signature, cfg.recurring_window_days
             )
         related = sum(
             1
@@ -517,7 +517,7 @@ class IssueAnalysisWorkflow:
         status = state.get("status") or self._final_status(state).value
         return AnalysisResult(
             analysis_id=state["analysis_id"],
-            issue_key=state["issue_key"],
+            incident_key=state["incident_key"],
             correlation_id=state["correlation_id"],
             inbox_event_id=state.get("inbox_event_id"),
             input_hash=state["input_hash"],

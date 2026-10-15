@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from branchops.domain.entities.incident import incident_key
 from branchops.domain.enums import InboxStatus
 from branchops.infrastructure.database.models import WebhookInbox
 
@@ -21,16 +22,22 @@ class InboxItem:
     correlation_id: str
     event_type: str
     raw_event_name: str
+    # The source's record key (``external_key``).
     issue_key: str | None
     payload: dict[str, Any]
     attempts: int
     max_attempts: int
     received_at: datetime
     lease_owner: str
+    source: str = "jira"
 
     @property
     def is_last_attempt(self) -> bool:
         return self.attempts >= self.max_attempts
+
+    @property
+    def incident_key(self) -> str | None:
+        return incident_key(self.source, self.issue_key) if self.issue_key else None
 
 
 @dataclass(frozen=True)
@@ -40,11 +47,12 @@ class NewInboxEvent:
     event_type: str
     raw_event_name: str
     issue_key: str | None
-    project_key: str | None
+    group_key: str | None
     event_timestamp: datetime | None
     payload: dict[str, Any]
     payload_sha256: str
     max_attempts: int
+    source: str = "jira"
 
 
 _CLAIM_SQL = text(
@@ -56,14 +64,14 @@ _CLAIM_SQL = text(
           AND i.available_at <= now()
           AND NOT EXISTS (
               SELECT 1 FROM webhook_inbox p
-              WHERE p.issue_key = i.issue_key
+              WHERE p.source = i.source AND p.issue_key = i.issue_key
                 AND p.status = 'PROCESSING'
                 AND p.lease_expires_at > now()
           )
-          -- one event per issue per claim: only the oldest pending event of each issue is eligible
+          -- one event per incident per claim: only the oldest pending event of each incident is eligible
           AND NOT EXISTS (
               SELECT 1 FROM webhook_inbox o
-              WHERE o.issue_key = i.issue_key
+              WHERE o.source = i.source AND o.issue_key = i.issue_key
                 AND o.status = 'PENDING'
                 AND o.id <> i.id
                 AND (o.received_at, o.id) < (i.received_at, i.id)
@@ -79,7 +87,7 @@ _CLAIM_SQL = text(
         lease_expires_at = now() + make_interval(secs => :lease)
     FROM candidates c
     WHERE w.id = c.id
-    RETURNING w.id, w.correlation_id, w.event_type, w.raw_event_name, w.issue_key, w.payload,
+    RETURNING w.id, w.correlation_id, w.event_type, w.raw_event_name, w.source, w.issue_key, w.payload,
               w.attempts, w.max_attempts, w.received_at, w.lease_owner
     """
 )
@@ -113,8 +121,9 @@ class InboxRepository:
                 correlation_id=event.correlation_id,
                 event_type=event.event_type,
                 raw_event_name=event.raw_event_name,
+                source=event.source,
                 issue_key=event.issue_key,
-                project_key=event.project_key,
+                group_key=event.group_key,
                 event_timestamp=event.event_timestamp,
                 payload=event.payload,
                 payload_sha256=event.payload_sha256,
@@ -144,6 +153,7 @@ class InboxRepository:
                 correlation_id=r.correlation_id,
                 event_type=r.event_type,
                 raw_event_name=r.raw_event_name,
+                source=r.source,
                 issue_key=r.issue_key,
                 payload=r.payload,
                 attempts=r.attempts,

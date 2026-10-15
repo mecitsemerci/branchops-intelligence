@@ -32,6 +32,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# XLSX support for the csv_import source (CSV/JSONL need nothing extra).
+xlsx = ["openpyxl>=3.1"]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
@@ -83,6 +85,7 @@ ignore = [
 "src/branchops/config/settings.py" = ["S105"]  # values are environment-variable NAMES, not secrets
 "src/branchops/infrastructure/llm/mock_provider.py" = ["E501"]  # keyword regex tables
 "src/branchops/application/queries/**" = ["E501"]  # SQL text
+"tests/integration/test_migration_0003.py" = ["E501"]  # raw SQL fixtures
 "src/branchops/simulator/**" = ["S311"]  # synthetic demo data, not security relevant
 
 [tool.mypy]

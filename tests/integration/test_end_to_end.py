@@ -477,14 +477,14 @@ def test_live_progress_is_recorded_during_the_run(
     live = seen["live"]
     assert isinstance(live, dict)
     (run,) = live["running"]
-    assert run["issue_key"] == "BOPS-101"
+    assert run["incident_key"] == "jira:BOPS-101"
     assert run["current_step"] == "extract"
     assert run["node_states"]["classify"] == "succeeded"
     assert run["node_states"]["extract"] == "running"
     assert run["node_states"]["persist"] == "pending"
     assert run["worker_id"]
     lanes = {lane["node"]: lane for lane in live["lanes"]}
-    assert lanes["extract"]["busy"][0]["issue_key"] == "BOPS-101"
+    assert lanes["extract"]["busy"][0]["incident_key"] == "jira:BOPS-101"
 
     with db.session() as s:
         after = live_activity(s)

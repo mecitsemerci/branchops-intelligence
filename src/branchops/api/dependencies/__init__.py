@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from branchops.application.interfaces.source_adapter import SourceRegistry
 from branchops.application.queries.read_models import ReadModels
 from branchops.config.settings import Settings
 from branchops.domain.enums import Role
@@ -22,6 +23,7 @@ class AppServices:
     db: Database
     registry: TemplateRegistry
     read_models: ReadModels
+    sources: SourceRegistry
 
 
 def services(request: Request) -> AppServices:

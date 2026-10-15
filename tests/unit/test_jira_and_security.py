@@ -59,7 +59,7 @@ class TestAdapter:
 
     def test_partial_payload_only_present_fields(self) -> None:
         ev = JiraWebhookAdapter(MAPPING).normalize(load_sample("partial_update"))
-        assert set(ev.issue_fields) == {"issue_id", "project_key", "description"}
+        assert set(ev.fields) == {"external_id", "group_key", "description"}
         assert "description" in ev.changed_fields
         assert ev.mapped_fields == {}
 

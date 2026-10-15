@@ -13,7 +13,7 @@ from typing import Annotated, Any, TypedDict
 class AnalysisState(TypedDict, total=False):
     # Inputs
     analysis_id: str
-    issue_key: str
+    incident_key: str
     correlation_id: str
     inbox_event_id: str | None
     input_hash: str

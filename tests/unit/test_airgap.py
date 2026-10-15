@@ -39,12 +39,14 @@ def test_nicegui_assets_are_bundled() -> None:
 def test_api_docs_disabled_because_they_use_a_cdn() -> None:
     from branchops.api.app import create_app
     from branchops.container import Container
+    from branchops.infrastructure.sources import build_source_registry
 
     settings = make_settings()
     container = Container.__new__(Container)  # no DB connection needed to inspect routes
     container.settings = settings
     container.db = None  # type: ignore[assignment]
     container.registry = None  # type: ignore[assignment]
+    container.sources = build_source_registry(settings)
     container._closeables = []
     app = create_app(settings, container)
     paths = {getattr(r, "path", "") for r in app.routes}

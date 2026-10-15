@@ -1,4 +1,4 @@
-"""Portfolio overview: headline counts, category distribution and daily trend."""
+"""Portfolio overview: headline counts, category and source distribution, daily trend."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ class Overview:
     low_quality_issues: int
     needs_review: int
     category_distribution: list[dict[str, Any]] = field(default_factory=list)
+    source_distribution: list[dict[str, Any]] = field(default_factory=list)
     daily_trend: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -41,6 +42,14 @@ def overview(s: Session, *, days: int = 30, low_quality_threshold: float) -> Ove
         select(category, func.count(), func.avg(Issue.latest_quality))
         .where(active)
         .group_by(category)
+        .order_by(func.count().desc())
+    ).all()
+    sources = s.execute(
+        select(
+            Issue.source, func.count(), func.count(Issue.latest_analysis_id), func.avg(Issue.latest_quality)
+        )
+        .where(active)
+        .group_by(Issue.source)
         .order_by(func.count().desc())
     ).all()
     trend = s.execute(
@@ -64,6 +73,10 @@ def overview(s: Session, *, days: int = 30, low_quality_threshold: float) -> Ove
         needs_review=int(row[5]),
         category_distribution=[
             {"category": c, "count": int(n), "avg_quality": _r(q)} for c, n, q in categories
+        ],
+        source_distribution=[
+            {"source": src, "count": int(n), "analysed": int(a), "avg_quality": _r(q)}
+            for src, n, a, q in sources
         ],
         daily_trend=[
             {"day": d.isoformat(), "issues": int(n), "avg_completeness": _r(c), "avg_quality": _r(q)}

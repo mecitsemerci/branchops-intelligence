@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from branchops.domain.enums import FieldState
 from branchops.domain.value_objects import ExtractedField
@@ -67,8 +67,10 @@ FIELD_LABELS_TR: Final[dict[str, str]] = {
 
 
 class CanonicalIssue(BaseModel):
-    issue_key: str
-    project: str | None = None
+    # Legacy names (``issue_key``, ``project``) are accepted for analyses persisted before multi-source.
+    incident_key: str = Field(validation_alias=AliasChoices("incident_key", "issue_key"))
+    source: str = "jira"
+    group_key: str | None = Field(default=None, validation_alias=AliasChoices("group_key", "project"))
     status: str | None = None
     source_created_at: datetime | None = None
     source_updated_at: datetime | None = None

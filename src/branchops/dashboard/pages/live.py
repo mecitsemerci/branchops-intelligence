@@ -9,7 +9,7 @@ from nicegui import ui
 
 from branchops.application.queries.read_models import WORKFLOW_NODES, live_activity
 from branchops.dashboard.components.charts import NODE_COLORS, NODE_STATE_TR, workflow_graph
-from branchops.dashboard.components.layout import STATUS_COLORS, authorize, frame, kpi, load
+from branchops.dashboard.components.layout import STATUS_COLORS, authorize, frame, issue_url, kpi, load
 from branchops.dashboard.context import DashboardContext
 
 REFRESH_SECONDS = 2.0
@@ -72,11 +72,11 @@ def _steps_table(steps: list[dict[str, Any]]) -> None:
 
 def _flow_dialog(run: dict[str, Any]) -> None:
     with ui.dialog() as dialog, ui.card().classes("min-w-[1150px]"):
-        ui.label(f"{run['issue_key']} — {run.get('summary') or ''}").classes("font-semibold")
+        ui.label(f"{run['incident_key']} — {run.get('summary') or ''}").classes("font-semibold")
         ui.echart(workflow_graph(WORKFLOW_NODES, run["node_states"])).classes("w-full h-44")
         _steps_table(run["steps"])
         with ui.row():
-            ui.button("Kayda git", on_click=lambda: ui.navigate.to(f"/issues/{run['issue_key']}")).props(
+            ui.button("Kayda git", on_click=lambda: ui.navigate.to(issue_url(run["incident_key"]))).props(
                 "outline"
             )
             ui.button("Kapat", on_click=dialog.close)
@@ -149,7 +149,7 @@ def register(ctx: DashboardContext) -> None:
                                     with ui.row().classes("items-center gap-1"):
                                         ui.spinner(size="xs")
                                         ui.label(
-                                            f"{b['issue_key']} · {_short_worker(b['worker_id'])} · {_ago(b['elapsed_s'])}"
+                                            f"{b['incident_key']} · {_short_worker(b['worker_id'])} · {_ago(b['elapsed_s'])}"
                                         ).classes("text-xs text-blue-800")
                             else:
                                 ui.label("boşta").classes("text-xs text-slate-400")
@@ -182,7 +182,7 @@ def register(ctx: DashboardContext) -> None:
                                         "STALE" if run["stale"] else "RUNNING",
                                         color="grey" if run["stale"] else "info",
                                     )
-                                    ui.link(run["issue_key"], f"/issues/{run['issue_key']}").classes(
+                                    ui.link(run["incident_key"], issue_url(run["incident_key"])).classes(
                                         "font-semibold"
                                     )
                                     ui.label(run.get("summary") or "").classes("text-sm truncate max-w-xl")
@@ -210,7 +210,7 @@ def register(ctx: DashboardContext) -> None:
                         with ui.card().classes("w-full py-1").props("flat bordered"):
                             with ui.row().classes("items-center gap-2 w-full"):
                                 ui.badge(run["status"], color=STATUS_COLORS.get(run["status"], "grey"))
-                                ui.link(run["issue_key"], f"/issues/{run['issue_key']}").classes(
+                                ui.link(run["incident_key"], issue_url(run["incident_key"])).classes(
                                     "font-semibold"
                                 )
                                 ui.label(run.get("summary") or "").classes("text-sm truncate max-w-md")
@@ -244,7 +244,7 @@ def register(ctx: DashboardContext) -> None:
                                     "DEAD_LETTER": "negative",
                                 }.get(e["status"], "grey"),
                             )
-                            ui.label(f"{e['issue_key']} · {e['event']} · {_ago(e['age_s'])} önce")
+                            ui.label(f"{e['incident_key'] or '—'} · {e['event']} · {_ago(e['age_s'])} önce")
                 workers_box.clear()
                 with workers_box:
                     if not data["workers"]:
