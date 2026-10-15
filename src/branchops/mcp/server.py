@@ -26,6 +26,8 @@ from branchops.infrastructure.observability.telemetry import setup_telemetry
 from branchops.infrastructure.security.auth import resolve_principal
 from branchops.mcp.auth import Caller, McpAuthMiddleware, RateLimiter, resolve_teams, validate_mcp_settings
 from branchops.mcp.middleware import ToolGuardMiddleware
+from branchops.mcp.prompts import register_prompts
+from branchops.mcp.resources import register_resources
 from branchops.mcp.runtime import McpRuntime
 from branchops.mcp.tools import TOOL_NAMES, register_tools
 
@@ -63,6 +65,8 @@ def build_server(
     )
     server.add_middleware(ToolGuardMiddleware(runtime))
     register_tools(server, runtime)
+    register_resources(server, runtime)
+    register_prompts(server)
     _register_probes(server, runtime)
     return server, runtime
 
