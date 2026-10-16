@@ -103,6 +103,15 @@ def list_issues(
     return Page(items=items, total=int(total), page=page, page_size=page_size)
 
 
+def _scoped_analysis(latest: Any, scope: QueryScope) -> dict[str, Any]:
+    """The investigation quotes and names other incidents, which a restricted scope may not cover: it is
+    only returned to unrestricted callers (dashboard/REST roles), never to team-scoped ones (MCP)."""
+    out = _analysis_dict(latest)
+    if not scope.is_unrestricted:
+        out.pop("investigation", None)
+    return out
+
+
 def issue_detail(s: Session, incident_key: str, *, scope: QueryScope = UNRESTRICTED) -> dict[str, Any] | None:
     """``incident_key`` like ``snow:INC0012345``; a bare legacy key (``OPS-123``) means Jira.
 
@@ -185,7 +194,7 @@ def issue_detail(s: Session, incident_key: str, *, scope: QueryScope = UNRESTRIC
             }
             for c in comments
         ],
-        "latest_analysis": _analysis_dict(latest) if latest else None,
+        "latest_analysis": _scoped_analysis(latest, scope) if latest else None,
         "score_history": [
             {
                 "analysis_id": str(h.id),

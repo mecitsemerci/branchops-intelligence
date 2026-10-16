@@ -174,6 +174,41 @@ class TestWorkflowStep:
         assert next(s for s in quiet.steps if s.step == "investigate").status is StepStatus.SKIPPED
         assert quiet.investigation is None
 
+    def test_model_written_quotes_are_masked_before_storage(self, registry: TemplateRegistry) -> None:
+        from branchops.agents.base import StructuredCaller as Caller
+        from branchops.domain.services.masking import SensitiveDataMasker
+        from branchops.workflows.issue_analysis import IssueAnalysisWorkflow
+
+        def leaky(_r: CompletionRequest) -> str:
+            return json.dumps(
+                {
+                    "action": "conclude",
+                    "findings": [
+                        {
+                            "statement": "Müşteri 0532 123 45 67 aradı.",
+                            "kind": "OBSERVATION",
+                            "evidence": [{"source": "summary", "quote": "TCKN 10000000146"}],
+                        }
+                    ],
+                }
+            )
+
+        settings = make_settings(workflow={"investigation": {"enabled": True}})
+        wf = IssueAnalysisWorkflow(
+            caller=Caller(ScriptedProvider({"InvestigationOutput": [leaky]})),
+            registry=registry,
+            policy=settings.scoring,
+            history=InMemoryHistory([_candidate("jira:BOPS-90")]),
+            sink=MemorySink(),
+            settings=settings.workflow,
+            investigation_reader=FakeReader(),
+            text_filter=SensitiveDataMasker().mask_str,
+        )
+        result = wf.run(initial(snapshot_from("complete_incident")), thread_id="inv-mask")
+        stored = result.model_dump_json()
+        assert "0532 123 45 67" not in stored and "10000000146" not in stored
+        assert result.investigation is not None and result.investigation.findings[0].kind == "HYPOTHESIS"
+
     def test_disabled_by_default(self, registry: TemplateRegistry) -> None:
         related = InMemoryHistory([_candidate("jira:BOPS-90")])
         result = self._workflow(registry, False, related).run(

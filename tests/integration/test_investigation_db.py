@@ -65,6 +65,17 @@ def test_investigation_runs_and_is_persisted(container: Container, settings: Set
     assert kinds == ["OBSERVATION", "HYPOTHESIS"]
     assert second["findings"][0]["evidence"][0]["verified"] is True
 
+    # Team-scoped callers (MCP) never get the investigation: it quotes other incidents outside their scope.
+    from branchops.application.queries.issues import issue_detail
+    from branchops.application.queries.scope import QueryScope, ScopeGrant
+
+    team = QueryScope.any_of([ScopeGrant.of(sources=["jira"], group_keys=["BOPS"])])
+    with db.session() as s:
+        scoped = issue_detail(s, "jira:BOPS-104", scope=team)
+        unscoped = issue_detail(s, "jira:BOPS-104")
+    assert scoped is not None and "investigation" not in scoped["latest_analysis"]
+    assert unscoped is not None and unscoped["latest_analysis"]["investigation"]["findings"]
+
     reader = DatabaseInvestigationReader(container.db)
     found = reader.search_history("EFT gönderimi zaman aşımı", 5, exclude="jira:BOPS-104")
     assert [i.incident_key for i in found] == ["jira:BOPS-101"]

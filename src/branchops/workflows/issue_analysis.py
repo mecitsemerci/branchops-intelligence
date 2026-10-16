@@ -61,6 +61,7 @@ from branchops.domain.entities.issue import CanonicalIssue
 from branchops.domain.enums import AnalysisStatus, RelationshipType, StepStatus
 from branchops.domain.services.prompt_injection import detect_prompt_injection
 from branchops.domain.services.signatures import error_signature
+from branchops.domain.value_objects import EvidenceRef
 from branchops.infrastructure.observability.telemetry import get_instruments, tracer
 from branchops.scoring.engine import resolve_fields, score_issue
 from branchops.scoring.policies import ScoringPolicy
@@ -603,15 +604,31 @@ class IssueAnalysisWorkflow:
         )
         status = state.get("status") or self._final_status(state).value
         f = self._filter
+
+        def quotes(refs: list[EvidenceRef]) -> list[EvidenceRef]:
+            # Unverified quotes are model output; verified ones come from masked text. Mask both anyway.
+            return [r.model_copy(update={"quote": f(r.quote)}) for r in refs]
+
         classification = Classification.model_validate(cls) if cls else None
-        if classification is not None and classification.rationale:
-            classification = classification.model_copy(update={"rationale": f(classification.rationale)})
-        assessments = [FieldAssessment.model_validate(a) for a in state.get("validated_assessments", [])]
-        assessments = [a.model_copy(update={"reason": f(a.reason)}) if a.reason else a for a in assessments]
+        if classification is not None:
+            classification = classification.model_copy(
+                update={
+                    "rationale": f(classification.rationale) if classification.rationale else None,
+                    "evidence": quotes(classification.evidence),
+                }
+            )
+        assessments = [
+            a.model_copy(update={"reason": f(a.reason), "evidence": quotes(a.evidence)})
+            for a in (FieldAssessment.model_validate(x) for x in state.get("validated_assessments", []))
+        ]
         recommendations = [Recommendation.model_validate(r) for r in state.get("recommendations", [])]
         recommendations = [r.model_copy(update={"message": f(r.message)}) for r in recommendations]
-        similar = [SimilarIssue.model_validate(s) for s in state.get("similar", [])]
-        similar = [s.model_copy(update={"rationale": f(s.rationale)}) if s.rationale else s for s in similar]
+        similar = [
+            s.model_copy(
+                update={"rationale": f(s.rationale) if s.rationale else None, "evidence": quotes(s.evidence)}
+            )
+            for s in (SimilarIssue.model_validate(x) for x in state.get("similar", []))
+        ]
         steps = [StepRecord.model_validate(s) for s in state.get("steps", [])]
         investigation = (
             InvestigationResult.model_validate(state["investigation"]) if state.get("investigation") else None
@@ -619,9 +636,17 @@ class IssueAnalysisWorkflow:
         if investigation is not None:
             investigation = investigation.model_copy(
                 update={
+                    "stopped_reason": f(investigation.stopped_reason)
+                    if investigation.stopped_reason
+                    else None,
                     "findings": [
-                        x.model_copy(update={"statement": f(x.statement)}) for x in investigation.findings
-                    ]
+                        x.model_copy(update={"statement": f(x.statement), "evidence": quotes(x.evidence)})
+                        for x in investigation.findings
+                    ],
+                    "tool_calls": [
+                        c.model_copy(update={"arguments": {k: f(v) for k, v in c.arguments.items()}})
+                        for c in investigation.tool_calls
+                    ],
                 }
             )
         return AnalysisResult(
