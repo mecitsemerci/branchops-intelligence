@@ -1,5 +1,19 @@
 # BranchOps Intelligence
 
+[![CI](https://github.com/mecitsemerci/branchops-intelligence/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mecitsemerci/branchops-intelligence/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/mecitsemerci/branchops-intelligence)](LICENSE)
+[![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![mypy: strict](https://img.shields.io/badge/mypy-strict-2A6DB2)](https://mypy-lang.org/)
+[![Last commit](https://img.shields.io/github/last-commit/mecitsemerci/branchops-intelligence)](https://github.com/mecitsemerci/branchops-intelligence/commits/main)
+
+[![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](docs/architecture.md)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](docs/architecture.md)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)](docs/agents.md)
+[![MCP](https://img.shields.io/badge/MCP-server-6E56CF)](docs/mcp-server.md)
+[![OpenShift](https://img.shields.io/badge/deploy-OpenShift-EE0000?logo=redhatopenshift&logoColor=white)](docs/openshift-deployment.md)
+[![Air-gapped](https://img.shields.io/badge/runtime-air--gapped%20%C2%B7%20on--prem%20LLM-555555)](docs/security.md)
+
 On-premise, Python-only agentic application that analyses operational incidents reported by bank branch
 staff. Incidents arrive from several sources — Jira webhooks, ServiceNow Business Rule webhooks, CSV/XLSX/JSONL
 imports — through per-source adapters into one source-neutral pipeline. It classifies and structures each incident with the bank's internal
@@ -138,7 +152,9 @@ make test-llm    # optional smoke tests against the real internal endpoint
 make lint typecheck
 ```
 
-CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite drops and recreates the
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs lint, strict mypy, the unit and PostgreSQL
+suites on Python 3.12 and 3.13, and renders the OpenShift manifests. It uses the mock provider; no model
+endpoint is needed. The PostgreSQL suite drops and recreates the
 `public` schema of `TEST_DATABASE_URL` — always point it at a dedicated database.
 
 ## Documentation
