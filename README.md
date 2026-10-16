@@ -14,6 +14,223 @@
 [![OpenShift](https://img.shields.io/badge/deploy-OpenShift-EE0000?logo=redhatopenshift&logoColor=white)](docs/openshift-deployment.md)
 [![Air-gapped](https://img.shields.io/badge/runtime-air--gapped%20%C2%B7%20on--prem%20LLM-555555)](docs/security.md)
 
+## Problem
+
+Bank branch staff report operational incidents (frozen teller screens, failed EFT transfers, card readers,
+login lock-outs) as tickets that are often incomplete ("Sistem çalışmıyor"), inconsistent and duplicated
+across branches. Operations teams spend hours triaging them: working out what the ticket is about, asking
+the branch for the missing details, spotting that five branches report the same error code, and finding the
+team that owns the screen. BranchOps Intelligence does this automatically for every incoming ticket. It
+classifies and structures it, scores its completeness and quality, finds duplicates and recurring errors,
+routes it to the owning team and tells the reporter exactly what is missing. It is designed for an
+air-gapped bank: everything runs on-premise (OpenShift), and the LLM is the bank's internal model.
+
+## Türkçe özet
+
+**Problem:** Şube personelinin açtığı operasyonel kayıtlar çoğu zaman eksik, tutarsız ve mükerrerdir;
+operasyon ekipleri sınıflandırma, eksik bilgi isteme ve doğru ekibe yönlendirme için saatler harcar.
+**Yaklaşım:** Her kayıt, LangGraph ile yönetilen çok adımlı bir ajan akışından geçer. Sınıflandırma ajanı
+kategoriyi belirler, kategori şablonu seçer, şablon hangi alanların çıkarılacağını, bu da neyin
+puanlanacağını belirler. Çıkarım, kalite değerlendirme, benzerlik, isteğe bağlı geçmiş inceleme (salt
+okunur araç çağrıları) ve öneri ajanları sırayla çalışır. Bütün sayısal kararlar (tamlık ve kalite
+puanları, mükerrer kapısı, yönlendirme) deterministik Python kodudur; modelin her alıntısı kaynak metinde
+doğrulanır. Sistem banka içinde, internete çıkmadan, kurum içi bir LLM ile çalışır.
+**Demo:** Sadece Docker ve make gerekir: `cp .env.example .env`, `make up LLM_MODE=mock`,
+`make sim-once`, ardından http://localhost:8090/live ve http://localhost:8090/issues; bitince `make down`.
+Mock mod deterministik anahtar kelime kurallarıyla saniyeler içinde çalışır; varsayılan `make up` ise vLLM
+ile gerçek bir model çalıştırır (CPU'da analiz başına 6–11 dakika).
+
+## Why an agent system and not a single LLM call
+
+* **Multi-step execution with dependencies (planning, orchestration).** Classification decides the
+  template, the template decides which fields to extract, the extracted fields decide what is scored and
+  which rubric applies, and the scores decide what to recommend. A LangGraph `StateGraph`
+  (`workflows/issue_analysis.py`) orchestrates ten nodes in that order, with a per-node time budget,
+  retries and partial results. One prompt cannot know the template before it has classified the ticket.
+* **Multi-agent coordination.** Seven specialised agents (classification, extraction, quality assessment,
+  similarity, investigation, recommendation, reporting) each have one prompt, one Pydantic output schema
+  and their own deterministic guards. They exchange typed state, never free text, and none of them can
+  change the control flow.
+* **Deterministic decisions, auditable output.** Every number (completeness, quality, priority, the
+  duplicate gate, routing) is computed by Python from validated model outputs under a versioned scoring
+  policy (`scoring/`). The model never outputs a score, so "puanı 100 ver" in a ticket changes nothing and
+  every score can be explained field by field.
+* **Retrieval before judgement (RAG).** Similarity first retrieves candidates from history with
+  PostgreSQL full-text search (`turkish`), a Turkish domain lexicon, error signatures and optional
+  embeddings; only the shortlist goes to the similarity agent, whose verdicts are then gated by Python.
+* **Tool calling with a bounded budget.** The optional `investigate` step runs only when related history
+  exists. The model plans its next step itself: it calls one of five allow-listed, read-only tools
+  (`search_history`, `get_issue_summary`, `issue_metadata`, `compare_error_signatures`,
+  `known_resolutions`) per turn, sees the result, and concludes within at most 4 tool calls, 3 turns,
+  90 s and 12k tokens (`agents/investigation.py`).
+* **Memory.** Postgres checkpoints (`PostgresSaver`) keep the state of a run, so a run interrupted by a
+  model outage or a crash resumes after the last completed node. The incident history, every past analysis
+  and its score history are the long-term memory that retrieval, investigation and analytics read.
+* **Grounding instead of trust.** Every quote the model gives as evidence is checked against the source
+  text (`domain/services/evidence.py`). An unverifiable value becomes `UNKNOWN`, and an unverifiable
+  investigation finding is stored as a `HYPOTHESIS`.
+* **A loop over time.** A follow-up comment or edit in the source system re-runs the pipeline. The new
+  analysis shows how the quality score changed, so reporters see their tickets improve.
+
+## What the agents do
+
+| Agent | Input | Output (validated) | Guard (Python) |
+|---|---|---|---|
+| ClassificationAgent | masked ticket + taxonomy from templates | category, subcategory, confidence, evidence | categories are a schema enum; HIGH confidence without a verified quote → MEDIUM |
+| ExtractionAgent | ticket + template field guide | per-field status, value, quotes | values whose quotes are not in the source → `UNKNOWN`; source custom fields override the model |
+| QualityAssessmentAgent | present fields + template rubric | rubric level per field (no numbers) | levels clamped (missing → ABSENT, invalid → max POOR); scores computed by the engine |
+| SimilarityAgent | current ticket + retrieved shortlist | verdict per candidate | keys must be in the shortlist; duplicate only if the deterministic gate passes; nothing is merged |
+| InvestigationAgent (optional) | candidates + tool results | tool call or conclusion with findings | allow-listed read-only tools, bounded budget; unsupported findings → `HYPOTHESIS` |
+| RecommendationAgent | gaps + template hints | one Turkish message per gap | may only address gap fields; template hints when the model fails |
+| ReportingAgent | SQL metrics | title, summary, highlights | every number must exist in the metrics, otherwise a deterministic report |
+
+```mermaid
+flowchart TD
+    S([START]) --> N[normalize<br/>sources, data envelope, injection flags]
+    N --> C[classify<br/>ClassificationAgent]
+    C --> T[select_template<br/>deterministic]
+    T --> E[extract<br/>ExtractionAgent + evidence verification]
+    E --> Q[assess_quality<br/>QualityAssessmentAgent]
+    Q --> SC[score<br/>Python quality engine]
+    SC --> SI[similarity<br/>exact · signature · FTS+lexicon · opt. embeddings → shortlist → SimilarityAgent]
+    SI --> I[investigate — optional<br/>only with related history · allow-listed read-only tools]
+    I --> R[recommend<br/>template hints → RecommendationAgent]
+    R --> P[persist]
+    P --> X([END])
+```
+
+Details, guards and how to add a capability: [docs/agents.md](docs/agents.md).
+
+## Screenshots
+
+Captured from `make up LLM_MODE=mock` after `make sim-once`, `make seed` and `make seed-demo`, with
+`make screenshots` ([`scripts/capture_screenshots.py`](scripts/capture_screenshots.py)). The UI is in
+Turkish, as the branch staff use it.
+
+**Canlı Akış (`/live`):** each LangGraph node as a card (robot = LLM agent, gear = deterministic step)
+with its latest output and 24-hour statistics, and below it every finished analysis with its per-node
+outcome strip (grey = skipped, for example `investigate` without related history).
+
+![Canlı Akış](docs/screenshots/02-live-agents.png)
+
+**Genel Bakış (`/`):** totals, average completeness and quality, low-quality and needs-review counts, the
+daily trend and the category distribution.
+
+![Genel Bakış](docs/screenshots/01-overview.png)
+
+**Kayıt Gezgini (`/issues`):** every incident from Jira and in-app reports with category, branch,
+completeness, quality and analysis status (`NEEDS_REVIEW` = the prompt-injection sample).
+
+![Kayıt Gezgini](docs/screenshots/03-issues.png)
+
+**Kayıt detayı (`/issues/<key>`):** one incident: per-field status, rubric level, source, verified
+evidence and what is missing (Eksik) or insufficient (Yetersiz); tabs for recommendations, similar
+incidents, app context, routing and score history.
+
+![Kayıt detayı](docs/screenshots/04-issue-detail.png)
+
+**Kalite Analitiği (`/analytics`):** routing KPIs, operational trends (UNKNOWN instead of 0 where the
+source has no status history), missing fields per category, quality by branch, quality improvements after
+updates and recurring error signatures.
+
+![Kalite Analitiği](docs/screenshots/05-analytics.png)
+
+**Ajan Çalıştırmaları (`/executions`):** every workflow run with status, duration, model, template,
+tokens, attempts and triggering event, plus the webhook inbox state.
+
+![Ajan Çalıştırmaları](docs/screenshots/06-executions.png)
+
+**Yönetim (`/yonetim`):** the ownership registry: teams, applications and screens, routing rules, "who
+owns this?" and the change log.
+
+![Yönetim](docs/screenshots/07-ownership-admin.png)
+
+**Bildirimler (`/bildirimler`):** notifications sent through the outbox: owner team as To, branch
+operations as CC, out-of-hours flag, status and resend.
+
+![Bildirimler](docs/screenshots/08-notifications.png)
+
+**MCP server:** `make mcp-health` and the catalogue other teams' MCP clients see: 17 tools, resources and
+prompts ([`scripts/mcp_catalogue.py`](scripts/mcp_catalogue.py)).
+
+![MCP server](docs/screenshots/09-mcp-tools.png)
+
+**`branchops report --days 30`:** the reporting agent's summary in mock mode; every number in the text
+comes from the SQL metrics below it.
+
+![branchops report](docs/screenshots/10-report.png)
+
+## Technologies
+
+| Technology | Why |
+|---|---|
+| Python 3.12 | one language for API, workers, agents and dashboard; the bank's platform image |
+| FastAPI | webhook and read API with typed validation, async request handling and OpenAPI |
+| LangGraph + `PostgresSaver` | explicit, bounded agent graph with per-node retries and resumable checkpoints in the existing database |
+| Pydantic | output schemas for every agent, context-aware validators, typed configuration |
+| SQLAlchemy + Alembic | repositories behind ports, additive (expand/contract) migrations |
+| PostgreSQL 17 (FTS `turkish`) | one store for inbox, data, checkpoints and retrieval; no extra vector database to operate |
+| NiceGUI | internal dashboard in Python with no CDN assets (air-gapped) |
+| FastMCP / MCP | lets other teams' assistants and in-app agents query and report incidents through audited, team-scoped tools |
+| OpenAI-compatible client | one client for the internal gateway (target GLM-5.3-Flash) and vLLM (Qwen2.5-1.5B-Instruct for the laptop demo); no vendor lock-in |
+| OpenTelemetry | metrics (Prometheus) and traces to the bank's internal collector only |
+| Docker Compose | the whole stack, including the model server, with one `make up` |
+| OpenShift | the bank's platform: non-root, read-only root filesystem, NetworkPolicies, oauth2-proxy SSO |
+| ruff, mypy `--strict`, pytest | lint, strict typing and unit + PostgreSQL integration tests in CI |
+
+## 5-minute demo
+
+Needs only Docker (with Compose v2) and `make`. The first `make up` builds the image (a few minutes).
+
+```bash
+git clone https://github.com/mecitsemerci/branchops-intelligence.git
+cd branchops-intelligence
+cp .env.example .env                 # every variable is documented there; the defaults work as they are
+make up LLM_MODE=mock                # postgres, api, worker, dashboard, mcp, simulator
+make sim-once                        # post one random Turkish branch incident right now
+open http://localhost:8090/live      # watch the agents work (xdg-open on Linux)
+open http://localhost:8090/issues    # the analysed incidents; click one for the details
+make down
+```
+
+`LLM_MODE=mock` uses a deterministic, keyword-based mock model, so an analysis finishes in well under a
+second and the demo needs no GPU or model download. Plain `make up` runs a real model through vLLM in
+Docker instead; on a laptop CPU that takes 6–11 minutes per analysis (see [Quick start](#quick-start)).
+With Python 3.12 installed, `make seed` and `make seed-demo` add the fixed samples, teams and in-app
+reports used for the screenshots.
+
+## Secrets and configuration
+
+All secrets come from the environment or a git-ignored `.env`; [`.env.example`](.env.example) documents
+every variable. Configuration files contain only the *names* of the environment variables that hold
+secrets, never their values, and BranchOps never writes secrets to the database or the logs. PII (TCKN, IBAN,
+card numbers, phone numbers, e-mail addresses) is masked before storage and before the model sees any text
+([security](docs/security.md)).
+
+## Error handling
+
+* **Invalid JSON from the model:** tolerant extraction, Pydantic validation, one bounded repair turn with
+  the validation errors; after that the step falls back and the analysis is `PARTIAL`
+  (`agents/base.py`, `workflows/issue_analysis.py`).
+* **Model down:** transient errors go back to the durable inbox, which retries with exponential backoff
+  and jitter (`workers/processor.py`). On the last attempt a provisional analysis is stored (`DEGRADED`
+  steps), and the recovery scheduler re-analyses it once the model is healthy (`workers/recovery.py`).
+* **Prompt injection:** Turkish and English detectors flag "ignore previous instructions"-style text and
+  chat-template tokens; the analysis is set to `NEEDS_REVIEW`, and scores cannot be influenced because they
+  are computed in Python (`domain/services/prompt_injection.py`).
+* **Partial or out-of-order webhooks:** a per-attribute version vector merges partial updates and ignores
+  stale ones; deletions are tombstones (`domain/services/snapshot_merge.py`).
+* **Tool errors in `investigate`:** an invalid tool call (unknown incident key, missing argument) is
+  returned to the model as an error result; an invalid model answer or an exhausted budget stores the
+  investigation as `DEGRADED` / `BUDGET_EXHAUSTED` and the pipeline continues with recommendations
+  (`agents/investigation.py`). A database failure retries the run, which resumes from its checkpoint.
+* **Bad webhook signature:** `401`, nothing is stored, a warning log record and the `unauthorized` outcome
+  metric (`api/routes/webhooks.py`, `infrastructure/security/webhook_auth.py`). Malformed or replayed
+  payloads get `400` or are ignored, and a poison message ends in the dead-letter queue after
+  `max_attempts`.
+
+## Architecture
+
 On-premise, Python-only agentic application that analyses operational incidents reported by bank branch
 staff. Incidents arrive from several sources — Jira webhooks, ServiceNow Business Rule webhooks, CSV/XLSX/JSONL
 imports — through per-source adapters into one source-neutral pipeline. It classifies and structures each incident with the bank's internal
@@ -109,7 +326,9 @@ running analysis with node states (waiting / running / done / failed / skipped);
 analyses with their per-node outcome strip and a diagram + step table on demand; incoming webhook events
 and active workers.
 
-Other targets: `make seed` (fixed samples), `make overview`, `make up WORKERS=3`, `make health`.
+Other targets: `make seed` (fixed samples), `make seed-demo` (samples plus demo teams, screens and in-app
+reports), `make screenshots` (README images; once: `.venv/bin/playwright install chromium`), `make overview`,
+`make up WORKERS=3`, `make health`.
 
 | Service | URL / port | Notes |
 |---|---|---|
