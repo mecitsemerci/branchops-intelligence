@@ -44,6 +44,20 @@ class TestAdapter:
         ev = JiraWebhookAdapter(MAPPING).normalize({**load_sample("partial_update"), "changelog": changelog})
         assert ev.issue_key == load_sample("partial_update")["issue"]["key"]
 
+    def test_payload_timestamp_comes_from_the_body_only(self) -> None:
+        from tests.unit.test_source_adapters import snow_adapter
+
+        jira = JiraWebhookAdapter(MAPPING)
+        sample = load_sample("complete_incident")
+        assert jira.payload_timestamp(sample) is not None
+        no_ts = {k: v for k, v in sample.items() if k != "timestamp"}
+        assert jira.payload_timestamp(no_ts) is not None  # falls back to issue.fields.updated
+        no_ts["issue"] = {**no_ts["issue"], "fields": {}}
+        assert jira.payload_timestamp(no_ts) is None
+        snow = snow_adapter()
+        assert snow.payload_timestamp({"sys_updated_on": "2026-10-15 09:12:44"}) is not None
+        assert snow.payload_timestamp({"number": "INC0010001"}) is None
+
     def test_payload_parsing_rejects_nul_and_non_objects(self) -> None:
         from branchops.application.commands.ingest_webhook import InvalidWebhookPayloadError, parse_payload
 

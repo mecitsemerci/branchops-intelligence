@@ -120,17 +120,19 @@ class IngestIncidentEvent:
             # (A -> B -> A); unchanged re-imports are cheap no-ops in the worker (same analysis input hash).
             key = f"event:{payload_digest(stored)}"
 
-        max_age = timedelta(days=self._settings.webhook.max_event_age_days)
-        if (
-            payload is not None
-            and event.event_timestamp is not None
-            and event.event_timestamp < datetime.now(UTC) - max_age
-        ):
-            return IngestResult(
-                IngestOutcome.IGNORED,
-                correlation_id,
-                reason="event older than webhook.max_event_age_days (replay protection)",
-            )
+        if payload is not None and event.event_type is not IncidentEventType.UNSUPPORTED:
+            # Replay protection, fail-closed: the time must come from the (authenticated) body; an event
+            # that asserts no time, or one older than the window, is acknowledged and not stored.
+            assert isinstance(adapter, PushSourceAdapter)  # noqa: S101 - checked above
+            stamp = adapter.payload_timestamp(payload)
+            max_age = timedelta(days=self._settings.webhook.max_event_age_days)
+            if stamp is None or stamp < datetime.now(UTC) - max_age:
+                return IngestResult(
+                    IngestOutcome.IGNORED,
+                    correlation_id,
+                    reason="event has no timestamp or is older than webhook.max_event_age_days "
+                    "(replay protection)",
+                )
         if event.event_type is IncidentEventType.UNSUPPORTED:
             return IngestResult(
                 IngestOutcome.IGNORED, correlation_id, reason=f"unsupported event {event.raw_event_name}"

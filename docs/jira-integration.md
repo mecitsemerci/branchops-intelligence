@@ -65,8 +65,14 @@ was authenticated:
 * **Token request:** `jira:delivery:<X-Atlassian-Webhook-Identifier>` when present, otherwise the payload
   digest.
 
-**Replay window.** An event whose own `timestamp` is older than `webhook.max_event_age_days` (7) is
-acknowledged with `200 ignored` and not stored. For signed requests the timestamp is part of the signed body.
+**Replay window.** An event is acknowledged with `200 ignored` and not stored when either holds:
+
+* its own time, read from the body only, is older than `webhook.max_event_age_days` (7). For Jira this is the
+  webhook `timestamp`, else `issue.fields.updated`; for ServiceNow it is `sys_updated_on`. The receive time is
+  never used.
+* it asserts no time at all (fail-closed).
+
+For signed requests the timestamp is part of the signed body.
 The setting must stay below `retention.inbox_days` (30), and startup is refused otherwise. This guarantees
 that a delivery is only accepted while its idempotency key is still in the inbox. Without the window, a
 captured delivery could be re-submitted once retention had purged its row.

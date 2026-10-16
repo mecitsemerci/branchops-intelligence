@@ -152,6 +152,12 @@ class TestReplayWindow:
                 r = post(c, old)
                 assert r.status_code == 200 and r.json()["status"] == "ignored"
                 assert "replay protection" in r.json()["reason"]
+                # Fail-closed: no time asserted by the body (receive time is never used).
+                undated = load_sample("complete_incident")
+                del undated["timestamp"]
+                del undated["issue"]["fields"]["updated"]
+                r = post(c, undated)
+                assert r.status_code == 200 and r.json()["status"] == "ignored"
                 fresh = {**load_sample("complete_incident"), "timestamp": int(time.time() * 1000)}
                 assert post(c, fresh).status_code == 202
         finally:
