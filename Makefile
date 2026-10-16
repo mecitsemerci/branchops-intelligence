@@ -6,8 +6,11 @@ SHELL := /bin/bash
 PYTHON        ?= python3.12
 VENV          ?= .venv
 BIN           := $(VENV)/bin
-LLM_MODE      ?= host
-COMPOSE       ?= docker compose -f deploy/docker/compose.yaml $(if $(wildcard .env),--env-file .env)
+LLM_MODE      ?= docker
+VLLM_DEVICE   ?= cpu
+HOST_LLM_PORT ?= 8000
+COMPOSE       ?= docker compose -f deploy/docker/compose.yaml \
+                 $(if $(filter gpu,$(VLLM_DEVICE)),-f deploy/docker/compose.gpu.yaml) $(if $(wildcard .env),--env-file .env)
 IMAGE         ?= branchops-intelligence:dev
 PROD_IMAGE    ?= registry.bank.internal/branchops/branchops-intelligence:0.1.0
 PROD_BASE     ?= registry.bank.internal/ubi9/python-312:latest
@@ -19,17 +22,18 @@ TEST_DATABASE_URL ?= postgresql+psycopg://branchops:branchops@localhost:$(POSTGR
 
 export IMAGE
 
-# Model wiring per LLM_MODE: host (Ollama on this machine, GPU/Metal), docker (ollama compose service), mock.
+# Model wiring per LLM_MODE: docker (vLLM compose service; VLLM_DEVICE=cpu|gpu), host (an OpenAI-compatible
+# server such as `vllm serve` on this machine, port HOST_LLM_PORT), mock. The model is VLLM_MODEL (.env).
 ifeq ($(LLM_MODE),mock)
 export LLM_PROVIDER := mock
-else ifeq ($(LLM_MODE),docker)
+else ifeq ($(LLM_MODE),host)
 export LLM_PROVIDER := openai-compatible
-export LLM_BASE_URL := http://ollama:11434/v1
+export LLM_BASE_URL := http://host.docker.internal:$(HOST_LLM_PORT)/v1
 else
 export LLM_PROVIDER := openai-compatible
-export LLM_BASE_URL := http://host.docker.internal:11434/v1
+export LLM_BASE_URL := http://vllm:8000/v1
 endif
-OLLAMA_MODEL  ?= branchops-gemma3:4b
+VLLM_PROFILE  := $(if $(filter docker,$(LLM_MODE)),--profile vllm)
 
 ##@ Help
 .PHONY: help
@@ -87,29 +91,27 @@ docker-build: ## Build the application image ($(IMAGE)) for local use
 	$(COMPOSE) build migrate
 
 .PHONY: model
-model: ## Prepare the Gemma model for LLM_MODE (host: ollama create; docker: pull inside compose)
-ifeq ($(LLM_MODE),host)
-	@command -v ollama >/dev/null || { echo "ollama not found: install Ollama or use LLM_MODE=docker|mock"; exit 1; }
-	@ollama list | grep -q '^gemma3:4b' || ollama pull gemma3:4b
-	ollama create $(OLLAMA_MODEL) -f deploy/ollama/Modelfile.gemma3
-else ifeq ($(LLM_MODE),docker)
-	$(COMPOSE) --profile ollama up -d --wait ollama
-	$(COMPOSE) --profile ollama run --rm ollama-init
+model: ## Start the model server for LLM_MODE and wait until the model is loaded (first run downloads it)
+ifeq ($(LLM_MODE),docker)
+	$(COMPOSE) --profile vllm up -d --wait vllm
+else ifeq ($(LLM_MODE),host)
+	@curl -sf http://localhost:$(HOST_LLM_PORT)/v1/models >/dev/null || { echo "no OpenAI-compatible server on \
+	  localhost:$(HOST_LLM_PORT): start one (e.g. vllm serve <model> --port $(HOST_LLM_PORT)) or use LLM_MODE=docker|mock"; exit 1; }
 else
 	@echo "LLM_MODE=mock: no model needed"
 endif
 
 .PHONY: up
-up: model ## Start the stack (LLM_MODE=host|docker|mock, WORKERS=n); simulator posts every 5 min
-	$(COMPOSE) $(if $(filter docker,$(LLM_MODE)),--profile ollama) up -d --build --wait --scale worker=$(WORKERS) \
-	  postgres migrate api worker dashboard mcp simulator $(if $(filter docker,$(LLM_MODE)),ollama)
+up: model ## Start the stack (LLM_MODE=docker|host|mock, VLLM_DEVICE=cpu|gpu, WORKERS=n); simulator every 5 min
+	$(COMPOSE) $(VLLM_PROFILE) up -d --build --wait --scale worker=$(WORKERS) \
+	  postgres migrate api worker dashboard mcp simulator $(if $(filter docker,$(LLM_MODE)),vllm)
 	@echo ""
 	@echo "  Live agents  http://localhost:$${DASHBOARD_PORT:-8090}/live"
 	@echo "  Dashboard    http://localhost:$${DASHBOARD_PORT:-8090}"
 	@echo "  API          http://localhost:$${API_PORT:-8080}   (health: /health/ready, metrics: /metrics)"
 	@echo "  MCP server   http://localhost:$${MCP_PORT:-8095}/mcp   (dev auth; health: /readyz)"
 	@echo "  Postgres     localhost:$(POSTGRES_PORT)  (branchops/branchops)"
-	@echo "  Model        $(LLM_MODE) · $${LLM_MODEL:-$(OLLAMA_MODEL)} · $(LLM_BASE_URL)"
+	@echo "  Model        $(LLM_MODE) · $${LLM_MODEL:-$${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}} · $(LLM_BASE_URL)"
 	@echo "  Simulator    one random incident every $${SIMULATOR_INTERVAL_SECONDS:-300}s (make sim-once for one now)"
 
 .PHONY: sim-once
@@ -127,12 +129,12 @@ db: ## Start only PostgreSQL (for running the app or tests from the virtualenv)
 	$(COMPOSE) up -d --wait postgres
 
 .PHONY: down
-down: ## Stop the stack (keeps the database volume)
-	$(COMPOSE) --profile ollama down
+down: ## Stop the stack (keeps the database and model cache volumes)
+	$(COMPOSE) --profile vllm down
 
 .PHONY: clean-docker
-clean-docker: ## Stop the stack and delete the database (and in-docker model) volumes
-	$(COMPOSE) --profile ollama down -v --remove-orphans
+clean-docker: ## Stop the stack and delete the database and model cache volumes
+	$(COMPOSE) --profile vllm down -v --remove-orphans
 
 .PHONY: restart
 restart: ## Restart api, worker, dashboard and mcp
@@ -143,7 +145,7 @@ ps: ## Show service status
 	$(COMPOSE) ps
 
 .PHONY: logs
-logs: ## Follow logs (SERVICE=api|worker|dashboard|mcp|simulator|migrate|postgres to filter)
+logs: ## Follow logs (SERVICE=api|worker|dashboard|mcp|simulator|migrate|postgres|vllm to filter)
 	$(COMPOSE) logs -f --tail=100 $(SERVICE)
 
 .PHONY: migrate

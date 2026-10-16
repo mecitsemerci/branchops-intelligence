@@ -66,28 +66,41 @@ flowchart LR
 Requirements: Docker with Compose v2, GNU make, Python 3.12 (only for `make seed` and the virtualenv
 targets). `make help` lists every target.
 
-### Full stack in Docker — Gemma agents + simulated Jira traffic
+### Full stack in Docker — vLLM agents + simulated Jira traffic
 
 ```bash
-make up                      # Gemma via host Ollama (default) + random incidents every 5 minutes
+make up                      # model in the vllm compose service + random incidents every 5 minutes
 open http://localhost:8090/live   # live agent view: who is doing what, workflow diagram per run
 make sim-once                # one more random incident right now
-make logs SERVICE=worker
-make down                    # stop (make clean-docker also deletes the database volume)
+make logs SERVICE=worker     # (SERVICE=vllm for the model server)
+make down                    # stop (make clean-docker also deletes the database and model cache volumes)
 ```
 
 | LLM_MODE | Model server | Notes |
 |---|---|---|
-| `host` (default) | Ollama on this machine, `http://host.docker.internal:11434/v1` | fastest (Metal/GPU); `make model` pulls `gemma3:4b` and creates `branchops-gemma3:4b` (16k context, temperature 0) |
-| `docker` | `ollama` compose service (profile `ollama`) | no host install needed; CPU inside Docker, slower |
+| `docker` (default) | `vllm` compose service (profile `vllm`), `http://vllm:8000/v1` | CPU image `vllm/vllm-openai-cpu` (amd64/arm64) by default; `VLLM_DEVICE=gpu` switches to the CUDA image on NVIDIA GPUs (`deploy/docker/compose.gpu.yaml`) |
+| `host` | an OpenAI-compatible server on this machine, `http://host.docker.internal:8000/v1` (`HOST_LLM_PORT`) | e.g. `vllm serve <model>`; set `LLM_MODEL` to its model name |
 | `mock` | none | deterministic keyword rules, for offline/CI |
 
-`make up LLM_MODE=docker` / `make up LLM_MODE=mock` switch modes. The **simulator** service posts a
+The model is `VLLM_MODEL` (default `Qwen/Qwen2.5-1.5B-Instruct`, Apache-2.0, not gated), served with a
+16k context (`VLLM_MAX_MODEL_LEN`, equal to `llm.capabilities.context_length`), JSON-schema structured
+outputs and temperature 0. `make up` first starts `vllm` and waits until the model is loaded: the first
+run downloads the image and the model (about 3 GB each) into the `vllm-cache` volume, later starts take
+under a minute. The endpoint is also published on `127.0.0.1:8099` (`VLLM_PORT`) for evaluations from the
+host. Other models: set `VLLM_MODEL` in `.env` (gated models also need `HF_TOKEN`); see `.env.example`.
+
+On CPU the default model needs about 6 GB of Docker memory (weights, 1 GiB KV cache, runtime); with the
+rest of the stack plan for 8 GB, and more for larger models. CPU inference is slow: on an Apple M3 Pro
+(Docker, 8 vCPU, no Metal) it decodes about 6–7 tokens/s and one analysis takes 6–11 minutes, so set
+`SIMULATOR_INTERVAL_SECONDS=900` in `.env` there, or use a GPU host. The 1.5B model keeps the stack
+runnable on a laptop and its structured output is always valid, but its classification is weak (a
+3-case live evaluation put every case in TRANSACTION); use a larger `VLLM_MODEL` when quality matters.
+
+`make up LLM_MODE=host` / `make up LLM_MODE=mock` switch modes. The **simulator** service posts a
 random Turkish branch incident every `SIMULATOR_INTERVAL_SECONDS` (default 300 s, ±10 % jitter) after a
 burst of `SIMULATOR_INITIAL_BURST` (default 2) — mixed categories, complete/partial/vague profiles,
 near-duplicates, recurring error codes and follow-up comments that add missing information (so score
-improvements appear). `make sim-stop` / `make sim-start` pause and resume it. With a local 4B model an
-analysis takes roughly 1–2 minutes, well inside the 5-minute arrival interval.
+improvements appear). `make sim-stop` / `make sim-start` pause and resume it.
 
 The **Canlı Akış** (`/live`) page refreshes every 2 seconds and shows:
 queue/worker KPIs; one card per workflow node (LLM agents and deterministic steps) with the issue it is
@@ -105,13 +118,14 @@ Other targets: `make seed` (fixed samples), `make overview`, `make up WORKERS=3`
 | mcp | http://localhost:8095/mcp | MCP server (read-mostly: queries plus in-app incident reporting and re-analysis requests), dev auth (`make mcp-health`) |
 | worker | :8081 inside the container | `/healthz`, `/readyz`, `/metrics` (`make health`) |
 | simulator | — | posts random incidents to the api (`simulate` command) |
+| vllm | 127.0.0.1:8099 | OpenAI-compatible model server (`/v1/models`, `/health`, `/metrics`); `make llm-health` |
 | postgres | localhost:55432 | `branchops/branchops`, databases `branchops` and `branchops_test` |
 
 The containers run like on OpenShift: arbitrary non-root UID in group 0, read-only root filesystem,
 writable `/tmp` only, all capabilities dropped. Configuration: `config/docker.yaml`; overrides via `.env`
 (see `.env.example`). Any other OpenAI-compatible endpoint works the same way: set `LLM_BASE_URL`,
-`LLM_MODEL`, `LLM_API_KEY` in `.env` and check with `make llm-health`. Ollama and the Gemma download
-are a developer-laptop convenience; in the bank the worker uses the internal inference gateway.
+`LLM_MODEL`, `LLM_API_KEY` in `.env` and check with `make llm-health`. The vLLM service and its model
+download are a developer-laptop convenience; in the bank the worker uses the internal inference gateway.
 
 The compose build uses the same Dockerfile as production with `WHEELHOUSE_SOURCE=online` (packages from
 `PIP_INDEX_URL`, default PyPI; point it at your mirror inside the bank). Production builds use

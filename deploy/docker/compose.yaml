@@ -1,9 +1,13 @@
-# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard + MCP server + simulator.
+# Full local stack: PostgreSQL + migrate (one-shot) + API + worker + dashboard + MCP server + simulator
+# + vLLM (OpenAI-compatible model server).
 #
-#   make up                    # Gemma via host Ollama (default), simulator posts an incident every 5 min
-#   make up LLM_MODE=docker    # Gemma in the `ollama` compose service (CPU in Docker)
+#   make up                    # model in the `vllm` compose service (CPU image), simulator every 5 min
+#   make up VLLM_DEVICE=gpu    # same, CUDA image on an NVIDIA GPU (adds compose.gpu.yaml)
+#   make up LLM_MODE=host      # vLLM (or any OpenAI-compatible server) already running on the host :8000
 #   make up LLM_MODE=mock      # deterministic mock model, no LLM needed
 #   make down
+#
+# Without make: docker compose -f deploy/docker/compose.yaml --profile vllm up -d --build
 #
 # Containers run like on OpenShift: arbitrary non-root UID in group 0, read-only root filesystem,
 # writable /tmp only, no capabilities. Model settings: config/docker.yaml and .env.example.
@@ -25,8 +29,8 @@ x-app: &app
   environment: &app-env
     BRANCHOPS_CONFIG: /app/config/branchops.yaml
     LLM_PROVIDER: ${LLM_PROVIDER:-openai-compatible}
-    LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
-    LLM_MODEL: ${LLM_MODEL:-branchops-gemma3:4b}
+    LLM_BASE_URL: ${LLM_BASE_URL:-http://vllm:8000/v1}
+    LLM_MODEL: ${LLM_MODEL:-${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}}
     JIRA_WEBHOOK_SECRETS: ${JIRA_WEBHOOK_SECRETS:-dev-secret}
     DASHBOARD_STORAGE_SECRET: ${DASHBOARD_STORAGE_SECRET:-local-dev-storage-secret}
   volumes:
@@ -140,33 +144,38 @@ services:
     depends_on:
       api: {condition: service_healthy}
 
-  # Optional in-Docker model server (profile "ollama", used by `make up LLM_MODE=docker`).
-  ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    profiles: ["ollama"]
-    volumes:
-      - ollama:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-    restart: unless-stopped
-
-  ollama-init:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    profiles: ["ollama"]
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    volumes:
-      - ../ollama:/models:ro
-    entrypoint: ["/bin/sh", "-c"]
+  # Model server (profile "vllm", started by `make up` / `make model`): vLLM's OpenAI-compatible API on
+  # http://vllm:8000/v1, published on loopback for `make llm-health` and evaluations from the host.
+  # The default image is vLLM's CPU build (amd64 and arm64, so it also runs on Apple silicon, without
+  # Metal); compose.gpu.yaml switches to the CUDA image. The first start downloads VLLM_MODEL from
+  # Hugging Face into the vllm-cache volume; later starts reuse it.
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai-cpu:v0.31.0}
+    profiles: ["vllm"]
     command:
-      - ollama pull gemma3:4b && ollama create branchops-gemma3:4b -f /models/Modelfile.gemma3
-    depends_on:
-      ollama: {condition: service_healthy}
-    restart: "no"
+      - ${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      - --host=0.0.0.0
+      - --port=8000
+      - --max-model-len=${VLLM_MAX_MODEL_LEN:-16384}   # = llm.capabilities.context_length
+      - --dtype=${VLLM_DTYPE:-bfloat16}
+      - --generation-config=vllm   # ignore the checkpoint's sampling defaults; the app sends temperature 0
+      - --enforce-eager            # CPU: same decode speed as the compiled graph, much faster start
+    environment:
+      VLLM_CPU_KVCACHE_SPACE: ${VLLM_CPU_KVCACHE_SPACE:-1}   # GiB of KV cache (CPU build only)
+      HF_TOKEN: ${HF_TOKEN:-}                               # only for gated models
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}                  # 1: never contact the Hub (model already cached)
+    ports: ["127.0.0.1:${VLLM_PORT:-8099}:8000"]
+    shm_size: 2gb
+    volumes:
+      - vllm-cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30m   # first start: image + model download and load
+    restart: unless-stopped
 
 volumes:
   pgdata:
-  ollama:
+  vllm-cache:

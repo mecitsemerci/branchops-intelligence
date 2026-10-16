@@ -1,8 +1,8 @@
 # Configuration for the docker compose stack (deploy/docker/compose.yaml).
 #
-# Model: by default the agents use Gemma 3 (branchops-gemma3:4b = gemma3:4b with a 16k context) served by
-# Ollama's OpenAI-compatible API — on the host (LLM_MODE=host, GPU/Metal accelerated) or in the
-# `ollama` compose service (LLM_MODE=docker). LLM_MODE=mock uses the deterministic mock provider.
+# Model: by default the agents use VLLM_MODEL (Qwen/Qwen2.5-1.5B-Instruct) served by vLLM's OpenAI-compatible
+# API in the `vllm` compose service (LLM_MODE=docker, CPU or VLLM_DEVICE=gpu), or by a server on the host
+# (LLM_MODE=host, port 8000). LLM_MODE=mock uses the deterministic mock provider.
 # All values below can be overridden through environment variables / .env (see .env.example).
 app:
   environment: development
@@ -29,8 +29,8 @@ sources:
     options: {id_column: Kayıt No}
 llm:
   provider: ${LLM_PROVIDER:-openai-compatible}
-  base_url: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
-  model: ${LLM_MODEL:-branchops-gemma3:4b}
+  base_url: ${LLM_BASE_URL:-http://vllm:8000/v1}
+  model: ${LLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
   api_key_env: LLM_API_KEY
   ca_bundle: ${LLM_CA_BUNDLE:-}
   timeout_seconds: ${LLM_TIMEOUT_SECONDS:-300}
@@ -38,10 +38,10 @@ llm:
   temperature: 0
   max_output_tokens: 3072
   capabilities:
-    structured_outputs: true      # Ollama supports response_format json_schema (grammar-constrained)
+    structured_outputs: true      # vLLM: response_format json_schema, grammar-constrained (xgrammar)
     json_mode: true
     tool_calling: false
-    context_length: 16384
+    context_length: 16384         # = vLLM --max-model-len (VLLM_MAX_MODEL_LEN)
     max_output_tokens: 4096
 workflow:
   checkpointer: postgres
@@ -58,6 +58,6 @@ security:
   dev_user: developer
   dev_roles: [ADMIN]
 network:
-  # Development hosts: the host machine (host Ollama) and the in-compose "ollama" service.
-  allowed_host_suffixes: [".svc", ".svc.cluster.local", ".internal", ".local", "localhost", "host.docker.internal", "ollama"]
+  # Development hosts: the host machine (LLM_MODE=host) and the in-compose "vllm" service.
+  allowed_host_suffixes: [".svc", ".svc.cluster.local", ".internal", ".local", "localhost", "host.docker.internal", "vllm"]
 templates: {directory: /app/templates}
