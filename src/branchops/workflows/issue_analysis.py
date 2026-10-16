@@ -457,6 +457,7 @@ class IssueAnalysisWorkflow:
                 candidates=by_key,
                 correlation_id=state["correlation_id"],
                 deadline=self._deadline(),
+                sources=state["sources"],
             )
             return verified, result.stats if result else None
 

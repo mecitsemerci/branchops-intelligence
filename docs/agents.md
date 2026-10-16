@@ -15,7 +15,7 @@ flowchart TD
     T --> E[extract<br/>ExtractionAgent + evidence verification]
     E --> Q[assess_quality<br/>QualityAssessmentAgent]
     Q --> SC[score<br/>Python quality engine]
-    SC --> SI[similarity<br/>FTS retrieval → shortlist → SimilarityAgent]
+    SC --> SI[similarity<br/>exact · signature · FTS+lexicon · opt. embeddings → shortlist → SimilarityAgent]
     SI --> R[recommend<br/>template hints → RecommendationAgent]
     R --> P[persist]
     P --> X([END])
@@ -63,7 +63,7 @@ finished step. Each graph node is wrapped (`_tracked`) to report start/finish; f
 | **ClassificationAgent** | issue envelope + taxonomy + category descriptions from templates | category, subcategory, application, business process, confidence, evidence | the JSON Schema enumerates the allowed categories/subcategories (grammar-constrained in json_schema mode) and a validator checks the pair; HIGH confidence without a verified quote → MEDIUM; `OTHER` → LOW |
 | **ExtractionAgent** | issue envelope + field guide | per-field status (`PRESENT/VAGUE/UNKNOWN/NOT_APPLICABLE/MISSING`), value, quotes | claims without a value become MISSING (normalised, no repair round-trip); values whose quotes cannot be found in the source (and that do not occur verbatim) become `UNKNOWN`; Jira custom fields override model values |
 | **QualityAssessmentAgent** | present fields + template rubric + validation problems | rubric level per field (`GOOD/ACCEPTABLE/POOR/ABSENT`) + reason | must cover exactly the requested fields; levels are clamped by Python (missing → ABSENT, validation failure or INSUFFICIENT → max POOR); never outputs numbers |
-| **SimilarityAgent** | current fingerprint + shortlisted candidates | verdict per candidate (`DUPLICATE_CANDIDATE/RELATED/UNRELATED`) | candidates come only from SQL; keys must be in the shortlist; `DUPLICATE_CANDIDATE` only if the duplicate gate passes (same branch + 72 h window + same application/error signature/subcategory) |
+| **SimilarityAgent** | current fingerprint + shortlisted candidates | verdict per candidate (`DUPLICATE_CANDIDATE/RELATED/POSSIBLE_COMMON_CAUSE/UNRELATED`) | candidates come only from the retrieval (SQL / optional embeddings); keys must be in the shortlist; `DUPLICATE_CANDIDATE` only if the duplicate gate passes (same branch + 72 h window + same application, error signature or specific error code: a shared subcategory alone is not enough); `RELATED` without a shared application/error code becomes `POSSIBLE_COMMON_CAUSE`; evidence quotes verified against the current record and the candidate texts; nothing is ever merged |
 | **RecommendationAgent** | gaps (missing/insufficient/unknown fields) + template hints | one Turkish message per gap | may only address gap fields; priorities are computed by Python; template hints are used when the model fails |
 | **ReportingAgent** | SQL metrics | title, summary, highlights | every number in the text must exist in the metrics, otherwise a deterministic report is used |
 

@@ -17,7 +17,7 @@ _TABLES = (
     "agent_steps, analyses, issue_relationships, issue_comments, issues, webhook_inbox, "
     "template_versions, audit_log, source_checkpoints, ticketing_outbox, "
     "ownership_changes, routing_rules, screens, applications, teams, attachments, incident_drafts, "
-    "incident_app_context, incident_routing, notification_outbox, analysis_recovery"
+    "incident_app_context, incident_routing, notification_outbox, analysis_recovery, issue_embeddings"
 )
 
 

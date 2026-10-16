@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB, REAL, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -516,3 +516,21 @@ class AnalysisRecovery(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("ix_analysis_recovery_due", "state", "next_attempt_at"),)
+
+
+class IssueEmbedding(Base):
+    """Embedding of an incident's retrieval text, produced by the configured internal embedding model.
+
+    Stored as ``REAL[]`` (no pgvector extension required); compared in Python over a bounded, recent pool.
+    Rows of another model are ignored, so changing ``similarity.embeddings.model`` never mixes vector spaces.
+    """
+
+    __tablename__ = "issue_embeddings"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    model: Mapped[str] = mapped_column(String(120), primary_key=True)
+    vector: Mapped[list[float]] = mapped_column(ARRAY(REAL), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_issue_embeddings_model_updated", "model", "updated_at"),)

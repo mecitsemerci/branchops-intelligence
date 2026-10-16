@@ -136,12 +136,50 @@ A model outage must not lose data or leave incidents with a permanently degraded
 Recovery success rate = `recovered / (recovered + exhausted)`. Example alerts are in
 `deploy/openshift/examples/prometheusrule.yaml`.
 
-## Embeddings
+## Embeddings (optional hybrid retrieval)
 
-The generative model is **not** used for embeddings. Similarity uses PostgreSQL full-text search. To add
-semantic retrieval with an approved internal embedding model, implement `HistoricalIssueReader` with a
-pgvector query (embeddings computed by that internal model in the worker) — the agent and workflow stay
-unchanged.
+The generative model is **never** used for embeddings. Startup is refused if `similarity.embeddings.model`
+equals `llm.model`, and nothing is downloaded. Candidate retrieval runs in this order:
+
+1. **Exact text and error signature/code.** These are deterministic signals (`same_text`,
+   `same_error_signature`, `same_error_code`).
+2. **PostgreSQL full-text search** (`turkish`), the baseline. The query is expanded with the versioned domain
+   lexicon (`domain/services/lexicon.py`), so "para sayma makinesi" finds "banknot sayım cihazı".
+3. **Optional vector similarity.** With `workflow.similarity.embeddings.enabled: true`, the worker embeds
+   each analysed incident through an approved internal OpenAI-compatible `/embeddings` endpoint. The URL is
+   checked against the internal allow-list and TLS is verified with the internal CA.
+   * Vectors are stored in `issue_embeddings` (`REAL[]`; the pgvector extension is **not** required) and
+     compared by cosine over the `candidate_pool` most recent incidents of the same embedding model.
+   * Hits above `min_score` are added as candidates with `semantic_score`. Above 0.8 they also get the
+     signal `semantic_match`.
+   * If the endpoint fails, retrieval silently uses full-text search only. The failure is counted in
+     `branchops_model_errors_total{agent="embeddings"}`.
+4. **LLM relationship verification**, bounded by deterministic rules (see [agents](agents.md)).
+
+```yaml
+workflow:
+  similarity:
+    embeddings:
+      enabled: true
+      base_url: https://embeddings.ai-platform.bank.internal/v1   # approved embedding service
+      model: bge-m3-tr          # an embedding model, never the generative one
+      api_key_env: EMBEDDING_API_KEY
+      candidate_pool: 2000
+      min_score: 0.75
+```
+
+Relationship types are `DUPLICATE_CANDIDATE` (never merged), `RELATED`, `POSSIBLE_COMMON_CAUSE` (a
+hypothesis), `UNRELATED`, and `UNVERIFIED_CANDIDATE` (the UNKNOWN case: retrieved but not verified). A
+changed embedding model never mixes vector spaces, because rows are keyed by model. Re-embedding happens
+naturally as incidents are re-analysed.
+
+**What has and has not been verified.**
+
+* Verified: the lexicon expansion and the embedding storage/ranking (`tests/integration/test_similarity_retrieval.py`),
+  and the bounds and fallback (`tests/unit/test_similarity_hybrid.py`).
+* Not verified here: retrieval quality with a real internal embedding model, because no endpoint was
+  available. Measure it with `branchops eval run --provider live` on a labelled dataset that contains
+  synonym pairs and hard negatives.
 
 ## Verifying against the real gateway
 

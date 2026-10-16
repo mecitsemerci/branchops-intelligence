@@ -344,12 +344,15 @@ class MockModelProvider:
         verdicts = []
         for c in payload.get("candidates", []):
             signals = set(c.get("shared_signals") or [])
-            if {"same_branch", "within_duplicate_window"} <= signals and (
-                "same_application" in signals or "same_error_signature" in signals
-            ):
+            anchored = bool(signals & {"same_application", "same_error_signature", "same_error_code"})
+            if {"same_branch", "within_duplicate_window"} <= signals and anchored:
                 rel = "DUPLICATE_CANDIDATE"
-            elif signals:
+            elif anchored:
                 rel = "RELATED"
+            elif {"same_category", "within_duplicate_window"} <= signals and (
+                signals & {"same_subcategory", "shared_concept"}
+            ):
+                rel = "POSSIBLE_COMMON_CAUSE"
             else:
                 rel = "UNRELATED"
             verdicts.append(

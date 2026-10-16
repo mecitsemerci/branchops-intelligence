@@ -178,6 +178,15 @@ workflow:
     duplicate_window_hours: 72
     recurring_window_days: 30
     recurring_threshold: 3
+    # Optional semantic retrieval with an approved internal embedding model (never the generative model).
+    embeddings:
+      enabled: false
+      base_url: null               # e.g. https://embeddings.ai-platform.bank.internal/v1
+      model: null
+      api_key_env: EMBEDDING_API_KEY
+      candidate_pool: 2000
+      top_k: 10
+      min_score: 0.75
 
 # Re-analysis of incidents whose analysis degraded because the model was unavailable (docs/model-integration.md).
 recovery:

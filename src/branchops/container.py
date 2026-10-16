@@ -91,13 +91,25 @@ class Container:
             caller=caller,
             registry=self.registry,
             policy=self.settings.scoring,
-            history=SessionBoundHistoryReader(self.db, IssueRepository()),
+            history=self.history_reader(),
             sink=DatabaseAnalysisSink(self.db, recovery=self.settings.recovery),
             settings=self.settings.workflow,
             checkpointer=checkpointer,
             progress=DatabaseProgressReporter(self.db),
             text_filter=SensitiveDataMasker(self.settings.security.masking_extra_patterns).mask_str,
         )
+
+    def history_reader(self) -> Any:
+        """Full-text history; with ``similarity.embeddings.enabled`` hybrid (adds internal-embedding hits)."""
+        lexical = SessionBoundHistoryReader(self.db, IssueRepository())
+        emb = self.settings.workflow.similarity.embeddings
+        if not emb.enabled:
+            return lexical
+        from branchops.infrastructure.llm.embeddings import OpenAICompatibleEmbeddingProvider
+        from branchops.infrastructure.persistence.embedding_repository import HybridHistoryReader
+
+        embedder = OpenAICompatibleEmbeddingProvider(emb, self.settings.network)
+        return HybridHistoryReader(lexical, self.db, embedder, emb)
 
     def close(self) -> None:
         for c in self._closeables:

@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from branchops.application.interfaces.repositories import CandidateIssue
 from branchops.domain.entities.incident import IncidentSnapshot, parse_incident_key
+from branchops.domain.services.lexicon import expand_query
 from branchops.infrastructure.database.models import (
     Analysis,
     Issue,
     IssueComment,
+    IssueEmbedding,
     IssueRelationship,
 )
 from branchops.infrastructure.database.session import Database
@@ -123,6 +125,7 @@ class IssueRepository:
         """
         session.execute(delete(Analysis).where(Analysis.incident_key == incident_key))
         session.execute(delete(IssueComment).where(IssueComment.incident_key == incident_key))
+        session.execute(delete(IssueEmbedding).where(IssueEmbedding.incident_key == incident_key))
         session.execute(
             delete(IssueRelationship).where(
                 (IssueRelationship.source_incident_key == incident_key)
@@ -180,7 +183,8 @@ class IssueRepository:
             _CANDIDATES_SQL,
             {
                 "incident_key": incident_key,
-                "query": query_text[:2000],
+                # Domain synonyms widen recall ("para sayma makinesi" ~ "banknot sayım cihazı").
+                "query": expand_query(query_text[:1500])[:2000],
                 "signature": error_signature,
                 "days": lookback_days,
                 "limit": limit,

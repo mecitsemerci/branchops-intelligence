@@ -339,6 +339,29 @@ class LLMSettings(BaseModel):
         return SecretStr(value) if value else None
 
 
+class EmbeddingSettings(BaseModel):
+    """Optional semantic retrieval with an *approved internal embedding model* (OpenAI-compatible
+    ``/embeddings``). Off by default; the generative model (e.g. GLM-5.3-Flash) must not be used here and
+    nothing is downloaded. When the endpoint is unavailable, retrieval falls back to full-text search.
+    """
+
+    enabled: bool = False
+    base_url: str | None = None
+    model: str | None = None
+    api_key_env: str = "EMBEDDING_API_KEY"
+    ca_bundle: str | None = None
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    # Most recent embedded incidents compared per analysis (cosine in Python; no pgvector required).
+    candidate_pool: int = Field(default=2000, ge=10, le=20_000)
+    top_k: int = Field(default=10, ge=1, le=50)
+    min_score: float = Field(default=0.75, ge=0, le=1)
+    max_input_chars: int = Field(default=2000, ge=100)
+
+    def api_key(self) -> SecretStr | None:
+        value = os.environ.get(self.api_key_env)
+        return SecretStr(value) if value else None
+
+
 class SimilaritySettings(BaseModel):
     candidate_limit: int = 20
     lookback_days: int = 180
@@ -347,6 +370,7 @@ class SimilaritySettings(BaseModel):
     duplicate_window_hours: int = 72
     recurring_window_days: int = 30
     recurring_threshold: int = 3
+    embeddings: EmbeddingSettings = EmbeddingSettings()
 
 
 class WorkflowSettings(BaseModel):
@@ -507,6 +531,19 @@ class Settings(BaseModel):
         for src in self.sources:
             if src.is_push and src.auth is None:
                 src.auth = SourceAuthSettings()
+        return self
+
+    @model_validator(mode="after")
+    def _embedding_model(self) -> Settings:
+        emb = self.workflow.similarity.embeddings
+        if emb.enabled:
+            if not (emb.base_url and emb.model):
+                raise ValueError("similarity.embeddings: base_url and model are required when enabled")
+            if emb.model == self.llm.model:
+                raise ValueError(
+                    "similarity.embeddings.model must be an approved embedding model, not the generative "
+                    f"model {self.llm.model!r}"
+                )
         return self
 
     @model_validator(mode="after")

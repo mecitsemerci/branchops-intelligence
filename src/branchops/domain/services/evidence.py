@@ -27,6 +27,9 @@ def resolve_source(sources: Mapping[str, str], ref_source: str) -> str | None:
     return None
 
 
+MIN_QUOTE_CHARS = 3
+
+
 def verify_evidence(sources: Mapping[str, str], refs: Iterable[EvidenceRef]) -> list[EvidenceRef]:
     """Return refs with ``verified`` recomputed. If the stated source is wrong but the quote exists in
     another source, the reference is corrected to that source."""
@@ -34,14 +37,18 @@ def verify_evidence(sources: Mapping[str, str], refs: Iterable[EvidenceRef]) -> 
     for ref in refs:
         quote = normalize_for_match(ref.quote)
         source_text = resolve_source(sources, ref.source)
-        if source_text is not None and quote and quote in normalize_for_match(source_text):
+        # Very short quotes ("a", "ok") occur almost anywhere and prove nothing (SEC-3).
+        if len(quote) < MIN_QUOTE_CHARS:
+            verified.append(EvidenceRef(source=ref.source, quote=ref.quote, verified=False))
+            continue
+        if source_text is not None and quote in normalize_for_match(source_text):
             verified.append(EvidenceRef(source=ref.source, quote=ref.quote, verified=True))
             continue
         found = next(
             (name for name, text in sources.items() if quote and text and quote in normalize_for_match(text)),
             None,
         )
-        if found is not None and len(quote) >= 2:
+        if found is not None:
             verified.append(EvidenceRef(source=found, quote=ref.quote, verified=True))
         else:
             verified.append(EvidenceRef(source=ref.source, quote=ref.quote, verified=False))
