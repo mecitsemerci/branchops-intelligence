@@ -34,9 +34,7 @@ def _legend() -> None:
             with ui.row().classes("items-center gap-1"):
                 ui.element("div").style(f"width:12px;height:12px;border-radius:3px;background:{color}")
                 ui.label(NODE_STATE_TR[state])
-        ui.label("· yuvarlak = LLM ajanı (Gemma), kare = deterministik Python adımı").classes(
-            "text-slate-500"
-        )
+        ui.label("· yuvarlak = LLM ajanı, kare = deterministik Python adımı").classes("text-slate-500")
 
 
 def _steps_table(steps: list[dict[str, Any]]) -> None:

@@ -1,6 +1,0 @@
-# BranchOps local development model: Gemma 3 4B with a context window large enough for the agents'
-# prompts (schema + rubrics + issue text). Ollama's default context (4k) silently truncates them.
-#   ollama create branchops-gemma3:4b -f deploy/ollama/Modelfile.gemma3
-FROM gemma3:4b
-PARAMETER num_ctx 16384
-PARAMETER temperature 0
