@@ -75,12 +75,66 @@ for determinism; scores never depend on free-form model output.
 | Concern | Behaviour |
 |---|---|
 | Timeouts | per request `min(llm.timeout_seconds, remaining node budget)` |
-| Transient errors (connect, timeout, 429, 5xx) | `ModelUnavailableError` → client retries → node retry → inbox retry with backoff → degraded analysis on the last attempt |
-| Rejected requests (401/403/400) | `ModelRequestError`, no retry, step degraded; credential errors never include key material |
+| Transient errors (connect, timeout, 429, 5xx) | `ModelUnavailableError` → client retries → node retry → inbox retry with backoff → provisional (recoverable) analysis on the last attempt → automatic recovery (below) |
+| Access errors (401/403, 404 unknown model or path) | `ModelAccessError`, a request error that operations fix (rotated key, renamed model), so it is retried and recovered like an outage; never includes key material |
+| Rejected requests (400 incl. context length, invalid output) | `ModelRequestError` / `StructuredOutputError`, no retry, step `FAILED`, analysis `PARTIAL`/`NEEDS_REVIEW` (not recoverable: waiting does not fix them) |
 | Health | `branchops llm health` calls `/models` (10 s, no retries) and checks the configured model is served |
 | Token usage / latency | recorded per step and as metrics `branchops_model_tokens`, `branchops_model_latency_milliseconds` |
 | Correlation | `X-Correlation-ID` and `X-Agent` headers on every model request |
 | Reasoning content | `<think>` blocks and `reasoning_content` are discarded, never logged or stored |
+
+## Model outages and recovery
+
+A model outage must not lose data or leave incidents with a permanently degraded analysis.
+
+1. **Retries first.** The client, LangGraph node and inbox retries (`worker.max_attempts`, exponential
+   backoff) absorb short outages.
+2. **Provisional result.** On the last inbox attempt the workflow runs with `allow_degraded`.
+   * Steps whose model call failed for a transient reason are recorded as `DEGRADED`, and the analysis is
+     stored with `recoverable = true`. Its status is `NEEDS_REVIEW` if classification degraded, otherwise
+     `PARTIAL`.
+   * The inbox event completes, so nothing is lost and history is kept.
+3. **The current analysis is protected.** A provisional result never replaces a non-provisional current
+   analysis of the issue, and no result of an older issue version (`source_updated_at`) or older run replaces
+   a newer one (`AnalysisRepository.replaces_latest`). A provisional result also never suppresses a later
+   redelivery: its input hash is ignored by the "no analysis-relevant change" check.
+4. **Recovery state machine** (`analysis_recovery`, one row per incident). It is updated in the same
+   transaction as the stored analysis:
+
+   ```
+   RECOVERY_PENDING ──enqueue──▶ RUNNING ──complete analysis──▶ COMPLETED
+          ▲                        ├─degraded again / event dead-lettered──▶ RETRY_WAIT ──due──▶ RUNNING
+          │                        └─attempts ≥ recovery.max_attempts──────▶ FAILED_PERMANENT
+          └─ a new provisional analysis after a terminal state starts a new cycle
+   ```
+
+   These map onto the requested states. Pending, running and completed exist as such. RETRY_WAIT is the
+   wait between attempts. PARTIAL→RECOVERY_PENDING is the recoverable flag. FAILED_PERMANENT is reached only
+   by exhausting the attempts; non-transient failures never enter the machine.
+5. **Scheduler.** The scheduler (`workers/recovery.py`) runs every `recovery.interval_seconds` in each worker
+   replica. It:
+   * closes stale `RUNNING` analysis rows (no heartbeat for `stale_running_minutes`) as `FAILED`;
+   * moves on recovery rows whose event was dead-lettered or lost;
+   * probes the model once when recoveries are due, and does nothing while the model is down, without
+     consuming attempts;
+   * claims at most `recovery.batch_size` due rows (`SKIP LOCKED`) and enqueues one re-analysis inbox event
+     per incident. Enqueueing is idempotent per degraded analysis and attempt, and is skipped while an event
+     for the incident is queued or running, so there are never duplicate active executions.
+
+   Backoff is `base_delay_seconds × 2^attempt`, capped at `max_delay_seconds`, with 75–100 % jitter.
+6. **Manual recovery.** `branchops recover [--incident KEY]` runs one tick and can make one incident due
+   now. The analyst's "Yeniden analiz" button and MCP `request_reanalysis` keep working as before.
+
+| Metric | Meaning |
+|---|---|
+| `branchops_model_up{model}` | 1/0 from the worker's 60-second health probe (readiness deliberately ignores the model) |
+| `branchops_recovery_analyses{state}` | recovery rows per state (pending backlog, permanent failures) |
+| `branchops_recovery_oldest_pending_seconds` | age of the oldest unrecovered provisional analysis |
+| `branchops_recovery_events_total{event}` | `recoverable_failure`, `enqueued`, `recovered`, `retry`, `exhausted`, `skipped_model_down`, `superseded` |
+| `branchops_model_health_checks_total{healthy}` | health probe results |
+
+Recovery success rate = `recovered / (recovered + exhausted)`. Example alerts are in
+`deploy/openshift/examples/prometheusrule.yaml`.
 
 ## Embeddings
 

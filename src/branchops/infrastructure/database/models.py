@@ -64,6 +64,7 @@ class WebhookInbox(Base):
         Index("ix_inbox_claim", "status", "available_at"),
         Index("ix_inbox_source_claim", "source", "status", "available_at"),
         Index("ix_inbox_incident", "source", "issue_key", "received_at"),
+        Index("ix_inbox_finished", "status", "processed_at"),
     )
 
 
@@ -157,6 +158,10 @@ class Analysis(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A step degraded because the model was unavailable: provisional result, eligible for recovery.
+    recoverable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     # Live progress (set while the workflow runs; cleared when the analysis is persisted).
     current_step: Mapped[str | None] = mapped_column(String(60))
     worker_id: Mapped[str | None] = mapped_column(String(200))
@@ -484,3 +489,30 @@ class NotificationOutbox(OutboxMixin, Base):
     recipient: Mapped[str] = mapped_column(String(320), nullable=False)
     team_id: Mapped[int | None] = mapped_column(Integer)
     role: Mapped[str] = mapped_column(String(10), nullable=False, default="to")  # to | cc
+
+
+class AnalysisRecovery(Base):
+    """Recovery state machine of an incident whose latest analysis degraded because the model was down.
+
+    ``RECOVERY_PENDING`` → ``RUNNING`` (a recovery inbox event is queued) → ``COMPLETED`` when a
+    non-degraded analysis is stored; a recovery run that degrades again goes to ``RETRY_WAIT`` (exponential
+    backoff) and, after ``max_attempts``, to ``FAILED_PERMANENT``. One row per incident.
+    """
+
+    __tablename__ = "analysis_recovery"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    analysis_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    inbox_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_analysis_recovery_due", "state", "next_attempt_at"),)

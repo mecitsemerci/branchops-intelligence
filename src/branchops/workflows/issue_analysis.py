@@ -27,7 +27,11 @@ from branchops.agents.prompts import issue_data_block, issue_sources
 from branchops.agents.quality_assessment import QualityAssessmentAgent
 from branchops.agents.recommendation import RecommendationAgent, deterministic_recommendations
 from branchops.agents.similarity import IssueFingerprint, SimilarityAgent, shortlist
-from branchops.application.interfaces.model_provider import ModelRequestError, ModelUnavailableError
+from branchops.application.interfaces.model_provider import (
+    ModelProvider,
+    ModelRequestError,
+    ModelUnavailableError,
+)
 from branchops.application.interfaces.repositories import (
     AnalysisSink,
     HistoricalIssueReader,
@@ -141,6 +145,10 @@ class IssueAnalysisWorkflow:
     def model_id(self) -> str:
         return self._caller.provider.model_id
 
+    @property
+    def provider(self) -> ModelProvider:
+        return self._caller.provider
+
     # --- graph ----------------------------------------------------------------------------------
 
     def _build(self) -> StateGraph[AnalysisState]:
@@ -246,7 +254,8 @@ class IssueAnalysisWorkflow:
             if not state.get("allow_degraded", False):
                 raise
             message = self._filter(str(exc))
-            return None, timer.record(StepStatus.FAILED, error=message), f"{step}: {message}"
+            # DEGRADED (not FAILED): the cause is transient, the analysis is eligible for recovery.
+            return None, timer.record(StepStatus.DEGRADED, error=message), f"{step}: {message}"
         except _RECOVERABLE as exc:
             message = self._filter(str(exc))
             usage = getattr(exc, "usage", None)
@@ -533,6 +542,7 @@ class IssueAnalysisWorkflow:
         recommendations = [r.model_copy(update={"message": f(r.message)}) for r in recommendations]
         similar = [SimilarIssue.model_validate(s) for s in state.get("similar", [])]
         similar = [s.model_copy(update={"rationale": f(s.rationale)}) if s.rationale else s for s in similar]
+        steps = [StepRecord.model_validate(s) for s in state.get("steps", [])]
         return AnalysisResult(
             analysis_id=state["analysis_id"],
             incident_key=state["incident_key"],
@@ -553,7 +563,8 @@ class IssueAnalysisWorkflow:
             recurring=state.get("recurring", False),
             recurring_count=state.get("recurring_count", 0),
             security_flags=state.get("security_flags", []),
-            steps=[StepRecord.model_validate(s) for s in state.get("steps", [])],
+            steps=steps,
+            recoverable=any(s.status is StepStatus.DEGRADED for s in steps),
             errors=state.get("errors", []),
             model_id=state.get("model_id"),
             canonical_issue=canonical_issue,

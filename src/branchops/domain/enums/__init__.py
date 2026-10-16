@@ -124,6 +124,15 @@ class AnalysisStatus(StrEnum):
 
 
 class StepStatus(StrEnum):
+    """Outcome of one workflow step.
+
+    SUCCEEDED  The step produced its result.
+    DEGRADED   The model was unavailable (outage, timeout, access refused); a fallback was used and the
+               analysis is eligible for automatic recovery.
+    FAILED     The step failed for a reason a retry will not fix (invalid output, rejected request).
+    SKIPPED    Nothing to do (e.g. no field to assess).
+    """
+
     SUCCEEDED = "SUCCEEDED"
     DEGRADED = "DEGRADED"
     FAILED = "FAILED"

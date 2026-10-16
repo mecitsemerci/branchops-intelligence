@@ -92,7 +92,7 @@ class Container:
             registry=self.registry,
             policy=self.settings.scoring,
             history=SessionBoundHistoryReader(self.db, IssueRepository()),
-            sink=DatabaseAnalysisSink(self.db),
+            sink=DatabaseAnalysisSink(self.db, recovery=self.settings.recovery),
             settings=self.settings.workflow,
             checkpointer=checkpointer,
             progress=DatabaseProgressReporter(self.db),

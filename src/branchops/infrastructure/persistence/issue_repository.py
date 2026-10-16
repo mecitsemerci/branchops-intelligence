@@ -156,10 +156,12 @@ class IssueRepository:
     def latest_input_hash(self, session: Session, incident_key: str) -> str | None:
         return session.execute(
             select(Analysis.input_hash)
-            # RUNNING/FAILED rows are in-flight or aborted attempts and must not suppress a retry.
+            # RUNNING/FAILED rows are in-flight or aborted attempts and must not suppress a retry; a result
+            # degraded by a model outage is provisional, so an unchanged redelivery re-analyses it.
             .where(
                 Analysis.incident_key == incident_key,
                 Analysis.status.in_(["COMPLETED", "PARTIAL", "NEEDS_REVIEW"]),
+                Analysis.recoverable.is_(False),
             )
             .order_by(Analysis.started_at.desc())
             .limit(1)

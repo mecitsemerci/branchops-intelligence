@@ -84,6 +84,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
     start_health_server(dispatcher, settings.worker.health_port, stale_after_seconds=120)
     dispatcher.install_signal_handlers()
     drainers = start_outbox_drainers(container, owner)
+    drainers += start_recovery(container, workflow.provider)
     try:
         dispatcher.run_forever()
     finally:
@@ -160,6 +161,50 @@ def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
     return tasks
 
 
+def start_recovery(container: Any, provider: Any) -> list[Any]:
+    """Model health probe (``branchops_model_up``) and the recovery scheduler, in every worker replica.
+
+    Readiness deliberately ignores the model: an LLM outage must not stop ingestion or take workers out of
+    service; it is visible through this gauge and handled by recovery.
+    """
+    from branchops.infrastructure.observability.telemetry import register_gauge
+    from branchops.infrastructure.persistence.recovery_repository import RecoveryRepository
+    from branchops.workers.housekeeping import PeriodicTask
+    from branchops.workers.recovery import ModelHealthProbe, RecoveryScheduler
+
+    settings = container.settings
+    probe = ModelHealthProbe(provider)
+    repo = RecoveryRepository(settings.recovery)
+
+    def model_up() -> list[tuple[float, dict[str, str]]]:
+        if probe.healthy is None:
+            return []
+        return [(1.0 if probe.healthy else 0.0, {"model": provider.model_id})]
+
+    def by_state() -> list[tuple[float, dict[str, str]]]:
+        with container.db.session() as s:
+            counts = repo.counts_by_state(s)
+        states = ("RECOVERY_PENDING", "RUNNING", "RETRY_WAIT", "COMPLETED", "FAILED_PERMANENT")
+        return [(float(counts.get(st, 0)), {"state": st}) for st in states]
+
+    def oldest() -> list[tuple[float, dict[str, str]]]:
+        with container.db.session() as s:
+            return [(repo.oldest_pending_age_seconds(s), {})]
+
+    register_gauge("branchops_model_up", "1 if the last model health probe succeeded", model_up)
+    register_gauge("branchops_recovery_analyses", "Recovery state machine rows by state", by_state)
+    register_gauge(
+        "branchops_recovery_oldest_pending_seconds", "Age of the oldest unrecovered degraded analysis", oldest
+    )
+    tasks: list[Any] = [PeriodicTask("model-health", lambda: probe.check(force=True), 60.0)]
+    if settings.recovery.enabled:
+        scheduler = RecoveryScheduler(container.db, settings, probe)
+        tasks.append(PeriodicTask("analysis-recovery", scheduler.tick, settings.recovery.interval_seconds))
+    for task in tasks:
+        task.start()
+    return tasks
+
+
 def check_notification_readiness(container: Any) -> None:
     """Production guard: the branch-ops team must exist, be active and be reachable on a working channel."""
     from branchops.application.commands.ownership import OwnershipService, notification_findings
@@ -171,6 +216,25 @@ def check_notification_readiness(container: Any) -> None:
     errors = [f.message for f in findings if f.level == "error"]
     if errors:
         raise SystemExit("refusing to start: " + "; ".join(errors))
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    """Run the recovery scheduler once (optionally making one incident due first)."""
+    from branchops.container import Container, create_model_provider
+    from branchops.workers.recovery import ModelHealthProbe, RecoveryScheduler
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        scheduler = RecoveryScheduler(
+            container.db, settings, ModelHealthProbe(create_model_provider(settings))
+        )
+        if args.incident:
+            scheduler.make_due(args.incident)
+        print(json.dumps(scheduler.tick(), default=str))
+    finally:
+        container.close()
+    return 0
 
 
 def cmd_inbox(args: argparse.Namespace) -> int:
@@ -536,6 +600,11 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--source", default=None, help="only this source (default: all enabled pull sources)")
     poll.add_argument("--once", action="store_true", help="poll every source once and exit")
     poll.set_defaults(func=cmd_poll)
+    rec = sub.add_parser(
+        "recover", help="re-analyse incidents degraded by a model outage (one scheduler tick)"
+    )
+    rec.add_argument("--incident", help="make this incident's pending recovery due now")
+    rec.set_defaults(func=cmd_recover)
     inbox = sub.add_parser("inbox", help="inbox utilities")
     inbox.add_argument("inbox_command", choices=["purge"], help="apply retention.inbox_days now")
     inbox.set_defaults(func=cmd_inbox)

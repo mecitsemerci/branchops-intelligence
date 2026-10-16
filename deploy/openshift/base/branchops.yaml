@@ -179,6 +179,17 @@ workflow:
     recurring_window_days: 30
     recurring_threshold: 3
 
+# Re-analysis of incidents whose analysis degraded because the model was unavailable (docs/model-integration.md).
+recovery:
+  enabled: true
+  interval_seconds: 60
+  base_delay_seconds: 300          # first retry, then doubling (75-100 % jitter)
+  max_delay_seconds: 21600
+  max_attempts: 6                  # then FAILED_PERMANENT (alert on branchops_recovery_analyses)
+  batch_size: 10                   # per tick and replica: no retry storm when the model returns
+  require_model_health: true
+  stale_running_minutes: 60
+
 templates:
   directory: /app/templates
 

@@ -279,6 +279,24 @@ class RetentionSettings(BaseModel):
     inbox_dead_letter_days: int = Field(default=90, ge=1)
 
 
+class RecoverySettings(BaseModel):
+    """Automatic re-analysis of incidents whose analysis degraded because the model was unavailable."""
+
+    enabled: bool = True
+    # How often the worker checks for due recoveries (each replica; rows are claimed with SKIP LOCKED).
+    interval_seconds: float = Field(default=60.0, ge=5)
+    # First retry after the degraded analysis, then doubling up to the maximum (with jitter).
+    base_delay_seconds: float = Field(default=300.0, ge=1)
+    max_delay_seconds: float = Field(default=6 * 3600.0, ge=1)
+    max_attempts: int = Field(default=6, ge=1, le=50)
+    # Recoveries enqueued per tick and replica: a returning model is not flooded (no retry storm).
+    batch_size: int = Field(default=10, ge=1, le=500)
+    # Enqueue only after a successful model health probe.
+    require_model_health: bool = True
+    # RUNNING analysis rows without a heartbeat for this long are closed as FAILED (crashed worker).
+    stale_running_minutes: int = Field(default=60, ge=5)
+
+
 class WorkerSettings(BaseModel):
     concurrency: int = Field(default=2, ge=1, le=32)
     batch_size: int = Field(default=4, ge=1, le=100)
@@ -453,6 +471,7 @@ class Settings(BaseModel):
     worker: WorkerSettings = WorkerSettings()
     llm: LLMSettings = LLMSettings()
     workflow: WorkflowSettings = WorkflowSettings()
+    recovery: RecoverySettings = RecoverySettings()
     templates: TemplateSettings = TemplateSettings()
     scoring: ScoringPolicy = ScoringPolicy()
     security: SecuritySettings = SecuritySettings()

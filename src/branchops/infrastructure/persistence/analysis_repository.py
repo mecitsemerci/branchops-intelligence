@@ -9,10 +9,12 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from branchops.config.settings import RecoverySettings
 from branchops.domain.entities.analysis import AnalysisResult
 from branchops.domain.enums import RelationshipType
 from branchops.infrastructure.database.models import AgentStep, Analysis, Issue, IssueRelationship
 from branchops.infrastructure.database.session import Database
+from branchops.infrastructure.persistence.recovery_repository import RecoveryRepository
 
 
 def _dump(items: list[Any]) -> list[Any]:
@@ -20,6 +22,11 @@ def _dump(items: list[Any]) -> list[Any]:
 
 
 class AnalysisRepository:
+    def __init__(self, recovery: RecoverySettings | None = None) -> None:
+        # With recovery settings, every stored analysis also drives the recovery state machine (same
+        # transaction); without them (tests, tools) the analysis is stored only.
+        self._recovery = RecoveryRepository(recovery) if recovery is not None and recovery.enabled else None
+
     def save(self, session: Session, result: AnalysisResult) -> None:
         analysis_id = uuid.UUID(result.analysis_id)
         scores = result.scores
@@ -63,6 +70,7 @@ class AnalysisRepository:
             "recurring_count": result.recurring_count,
             "security_flags": result.security_flags,
             "errors": result.errors,
+            "recoverable": result.recoverable,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "started_at": result.started_at,
@@ -97,6 +105,8 @@ class AnalysisRepository:
             )
         self._save_relationships(session, result)
         self._update_issue(session, result)
+        if self._recovery is not None:
+            self._recovery.record_analysis(session, result)
 
     def _save_relationships(self, session: Session, result: AnalysisResult) -> None:
         analysis_id = uuid.UUID(result.analysis_id)
@@ -143,13 +153,17 @@ class AnalysisRepository:
 
     def _update_issue(self, session: Session, result: AnalysisResult) -> None:
         canonical = result.canonical_issue
-        latest_started = session.execute(
-            select(Analysis.started_at)
+        latest = session.execute(
+            select(Analysis.id, Analysis.started_at, Analysis.source_updated_at, Analysis.recoverable)
             .join(Issue, Issue.latest_analysis_id == Analysis.id)
             .where(Issue.incident_key == result.incident_key)
-        ).scalar_one_or_none()
-        if latest_started is not None and latest_started > result.started_at:
-            return  # a newer analysis already owns the denormalised columns
+        ).one_or_none()
+        if (
+            latest is not None
+            and latest.id != uuid.UUID(result.analysis_id)
+            and not replaces_latest(result, latest)
+        ):
+            return  # the current analysis stays authoritative (see ``replaces_latest``)
         scores = result.scores
         session.execute(
             update(Issue)
@@ -168,12 +182,33 @@ class AnalysisRepository:
         )
 
 
+def replaces_latest(result: AnalysisResult, latest: Any) -> bool:
+    """Whether ``result`` may become the issue's current analysis instead of ``latest``.
+
+    * Never for an older issue version (``source_updated_at``) or an older run (``started_at``): a late
+      retry or recovery must not overwrite newer information.
+    * A provisional result (degraded because the model was unavailable) never replaces a non-provisional
+      one; the recovery scheduler re-analyses and the complete result takes over then.
+    """
+    if (
+        latest.source_updated_at is not None
+        and result.source_updated_at is not None
+        and result.source_updated_at < latest.source_updated_at
+    ):
+        return False
+    if latest.started_at is not None and latest.started_at > result.started_at:
+        return False
+    return not (result.recoverable and not latest.recoverable)
+
+
 class DatabaseAnalysisSink:
     """``AnalysisSink`` that writes each result in its own transaction."""
 
-    def __init__(self, db: Database, repo: AnalysisRepository | None = None) -> None:
+    def __init__(
+        self, db: Database, repo: AnalysisRepository | None = None, recovery: RecoverySettings | None = None
+    ) -> None:
         self._db = db
-        self._repo = repo or AnalysisRepository()
+        self._repo = repo or AnalysisRepository(recovery)
 
     def save(self, result: AnalysisResult) -> None:
         with self._db.session() as session:

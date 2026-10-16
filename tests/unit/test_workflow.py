@@ -168,8 +168,10 @@ def test_model_unavailable_raises_unless_last_attempt(registry: TemplateRegistry
     assert result.status is AnalysisStatus.NEEDS_REVIEW
     assert result.template_id == "generic-operational-incident"
     assert result.scores is not None and result.scores.completeness_score is not None
-    failed = {s.step for s in result.steps if s.status is StepStatus.FAILED}
-    assert {"classify", "extract"} <= failed
+    # Outage-degraded steps are DEGRADED (transient cause), which makes the analysis recoverable (REC-5).
+    degraded = {s.step for s in result.steps if s.status is StepStatus.DEGRADED}
+    assert {"classify", "extract"} <= degraded
+    assert result.recoverable
     assert len(sink.results) == 1
 
 
@@ -178,6 +180,7 @@ def test_invalid_output_degrades_to_partial(registry: TemplateRegistry) -> None:
     wf, _ = build(registry, provider)
     result = wf.run(initial(snapshot_from("complete_incident")), thread_id="t10")
     assert result.status is AnalysisStatus.PARTIAL
+    assert not result.recoverable  # invalid output is not fixed by waiting
     assert result.scores is not None
     assert result.scores.quality_score is None
     assert result.scores.completeness_score is not None

@@ -122,6 +122,9 @@ class AnalysisResult(BaseModel):
     security_flags: list[str] = Field(default_factory=list)
     steps: list[StepRecord] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    # True when a step degraded because the model was unavailable: the result is provisional and the
+    # recovery scheduler re-analyses the incident once the model is back.
+    recoverable: bool = False
     model_id: str | None = None
     canonical_issue: CanonicalIssue | None = None
     error_signature: str | None = None
