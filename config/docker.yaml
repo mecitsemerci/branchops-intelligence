@@ -50,10 +50,14 @@ workflow:
   max_input_chars: 12000
   # Demo: the agentic investigation step is on. It runs only when the similarity step found related
   # history, calls allow-listed read-only tools and is bounded (defaults kept: 4 tool calls, 3 turns).
+  # max_seconds: the production default (90 s) assumes a GPU gateway. The compose vLLM service decodes
+  # about 6-7 tokens/s on a laptop CPU, where one investigation turn takes 30-90 s; within 90 s most
+  # investigations would end before the model can conclude.
   investigation:
     enabled: true
     max_tool_calls: 4
     max_depth: 3
+    max_seconds: 480
 worker:
   concurrency: ${WORKER_CONCURRENCY:-1}   # one local model instance: process one issue at a time
   poll_interval_seconds: 1
