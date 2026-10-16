@@ -13,11 +13,15 @@ def cap_level(level: RubricLevel, ceiling: RubricLevel) -> RubricLevel:
 
 
 def validated_level(
-    state: FieldState, model_level: RubricLevel | None, has_validation_errors: bool
+    state: FieldState,
+    model_level: RubricLevel | None,
+    has_validation_errors: bool,
+    non_specific_cap: RubricLevel | None = None,
 ) -> tuple[RubricLevel | None, str | None]:
     """Apply deterministic constraints to the level proposed by the model.
 
     Returns ``(level, adjustment_reason)``. ``None`` level means "not scorable" (excluded state).
+    ``non_specific_cap`` is the policy's ceiling for a free-text field without any operational anchor.
     """
     if state in (FieldState.NOT_APPLICABLE, FieldState.UNKNOWN):
         return None, None
@@ -34,6 +38,11 @@ def validated_level(
         return RubricLevel.POOR, "template validation failed"
     if state is FieldState.INSUFFICIENT and proposed is not cap_level(proposed, RubricLevel.POOR):
         return RubricLevel.POOR, "field state is INSUFFICIENT"
+    if non_specific_cap is not None and proposed is not cap_level(proposed, non_specific_cap):
+        return (
+            non_specific_cap,
+            "text has no operational anchor (number, error code, device, system or process)",
+        )
     return proposed, reason
 
 

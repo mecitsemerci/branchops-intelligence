@@ -244,7 +244,10 @@ class GroupScores(BaseModel):
 
 class FieldCount(BaseModel):
     field: str
-    count: int
+    count: int = Field(description="Analyses in which the field is confirmed MISSING.")
+    unknown: int = Field(
+        default=0, description="Analyses in which the field could not be determined (UNKNOWN)."
+    )
 
 
 class Improvement(BaseModel):

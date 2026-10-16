@@ -58,7 +58,12 @@ class ScoreResult(BaseModel):
     missing_fields: list[str]
     insufficient_fields: list[str]
     unknown_fields: list[str]
+    # Required fields in MISSING *or* UNKNOWN state (kept for compatibility: both need a follow-up).
     missing_required_fields: list[str]
+    # The same split by cause: confirmed absent vs. not determinable from the record (e.g. extraction failed).
+    # Defaults keep analyses stored before these lists existed readable.
+    missing_required_confirmed: list[str] = Field(default_factory=list)
+    unknown_required: list[str] = Field(default_factory=list)
     template_id: str
     template_version: str
     scoring_policy_version: str

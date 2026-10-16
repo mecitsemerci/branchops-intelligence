@@ -50,15 +50,21 @@ def quality_analytics(
     missing = s.execute(
         text(
             """
-                SELECT f AS field, count(*) AS n
+                SELECT f.field,
+                       count(*) FILTER (WHERE f.kind = 'MISSING') AS n,
+                       count(*) FILTER (WHERE f.kind = 'UNKNOWN') AS unknown
                 FROM issues i JOIN analyses a ON a.id = i.latest_analysis_id
-                CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(a.missing_fields, '[]'::jsonb)) AS f
+                CROSS JOIN LATERAL (
+                    SELECT x, 'MISSING' FROM jsonb_array_elements_text(coalesce(a.missing_fields, '[]'::jsonb)) x
+                    UNION ALL
+                    SELECT x, 'UNKNOWN' FROM jsonb_array_elements_text(coalesce(a.unknown_fields, '[]'::jsonb)) x
+                ) AS f(field, kind)
                 WHERE NOT i.is_deleted
                   AND coalesce(i.source_created_at, i.created_at) >= now() - make_interval(days => :days)
                 """
             + scope_i_sql
             + """
-                GROUP BY f ORDER BY n DESC LIMIT 15
+                GROUP BY f.field ORDER BY n DESC, unknown DESC, f.field LIMIT 15
                 """
         ),
         params,
@@ -127,7 +133,10 @@ def quality_analytics(
             }
             for r in by_branch
         ],
-        "most_missing_fields": [{"field": r.field, "count": int(r.n)} for r in missing],
+        # ``count`` = confirmed MISSING; ``unknown`` = not determinable (e.g. extraction failed) - kept apart.
+        "most_missing_fields": [
+            {"field": r.field, "count": int(r.n), "unknown": int(r.unknown)} for r in missing
+        ],
         "improvements": [
             {
                 "incident_key": r.incident_key,

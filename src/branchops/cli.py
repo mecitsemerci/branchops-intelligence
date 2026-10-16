@@ -397,6 +397,12 @@ def cmd_llm(args: argparse.Namespace) -> int:
     return 0 if health.healthy else 2
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    from branchops.evaluation.cli import run_eval
+
+    return run_eval(_settings(args), args)
+
+
 def cmd_replay(args: argparse.Namespace) -> int:
     from branchops.container import Container
     from branchops.infrastructure.persistence.audit import audit
@@ -516,6 +522,9 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("event_id")
     replay.add_argument("--actor", default="operator")
     replay.set_defaults(func=cmd_replay)
+    from branchops.evaluation.cli import add_parser as add_eval_parser
+
+    add_eval_parser(sub, cmd_eval)
     sim = sub.add_parser("simulate", help="send random synthetic incidents to the API (dev/demo only)")
     sim.add_argument("--api-url", default=os.environ.get("SIMULATOR_API_URL", "http://localhost:8080"))
     sim.add_argument("--secret", default=None, help="webhook secret (default: first of JIRA_WEBHOOK_SECRETS)")

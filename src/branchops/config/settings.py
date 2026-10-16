@@ -17,7 +17,7 @@ import yaml
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from branchops.domain.enums import Role
-from branchops.scoring.policies import ScoringPolicy
+from branchops.scoring.policies import ScoringPolicy, registry_conflicts
 
 # Development fallback: stable within one process only (production requires the configured key).
 _PROCESS_PSEUDONYM_KEY = os.urandom(32)
@@ -480,6 +480,16 @@ class Settings(BaseModel):
         for src in self.sources:
             if src.is_push and src.auth is None:
                 src.auth = SourceAuthSettings()
+        return self
+
+    @model_validator(mode="after")
+    def _released_scoring_policy(self) -> Settings:
+        conflicts = registry_conflicts(self.scoring)
+        if conflicts:
+            raise ValueError(
+                f"scoring: version {self.scoring.version} is a released policy; changing {conflicts} "
+                "requires a new scoring.version"
+            )
         return self
 
     @model_validator(mode="after")

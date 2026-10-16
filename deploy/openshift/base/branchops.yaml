@@ -180,7 +180,9 @@ templates:
   directory: /app/templates
 
 scoring:
-  version: "2026.10-1"
+  # Released versions are registered in src/branchops/scoring/policies.py (POLICY_HISTORY); a registered
+  # version always scores with its registered parameters. 2026.10-2 adds the non-specific text cap.
+  version: "2026.10-2"
   sufficient_completeness_credit: 1.0
   insufficient_completeness_credit: 1.0
   unknown_completeness_handling: CREDIT
@@ -189,6 +191,8 @@ scoring:
   unknown_quality_handling: CREDIT
   unknown_quality_credit: 0.0
   low_quality_threshold: 50
+  specificity_fields: [summary, description]
+  non_specific_level_cap: POOR
 
 security:
   auth_mode: oauth_proxy

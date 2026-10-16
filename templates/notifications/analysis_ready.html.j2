@@ -4,6 +4,7 @@
 <p style="font-size:16px;"><b>{{ summary }}</b></p>
 <p>Kategori: <b>{{ category or "—" }}</b> · Tamlık: <b>{{ completeness if completeness is not none else "—" }}</b> · Kalite: <b>{{ quality if quality is not none else "—" }}</b> (0-100)</p>
 {% if missing_fields %}<p>Eksik bilgiler:</p><ul>{% for f in missing_fields %}<li>{{ f }}</li>{% endfor %}</ul>{% endif %}
+{% if unknown_required_fields %}<p>Belirlenemeyen zorunlu bilgiler (kayıttan anlaşılamadı):</p><ul>{% for f in unknown_required_fields %}<li>{{ f }}</li>{% endfor %}</ul>{% endif %}
 {% if similar %}<p>Benzer kayıtlar: {{ similar | join(", ") }}</p>{% endif %}
 {% if added_teams %}<p>Analiz sonucu eklenen ekipler: {{ added_teams | join(", ") }}</p>{% endif %}
 {% endblock %}
