@@ -86,6 +86,7 @@ async def _ingest(request: Request, svc: AppServices, source_id: str) -> JSONRes
                 payload,
                 correlation_id=request.state.correlation_id,
                 headers=dict(request.headers),
+                signed=mechanism == "hmac",
             )
         except InvalidWebhookPayloadError as exc:
             outcome_label = "invalid"

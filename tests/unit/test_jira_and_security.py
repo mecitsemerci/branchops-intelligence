@@ -38,6 +38,21 @@ class TestAdapter:
         assert ev.source_updated_at is not None
         assert ev.source_updated_at.utcoffset() is not None
 
+    @pytest.mark.parametrize("changelog", [["x"], "x", 7, None, {"items": "x"}])
+    def test_malformed_changelog_is_treated_as_absent(self, changelog: Any) -> None:
+        """Regression (gap analysis ING-1): a list changelog raised AttributeError -> HTTP 500."""
+        ev = JiraWebhookAdapter(MAPPING).normalize({**load_sample("partial_update"), "changelog": changelog})
+        assert ev.issue_key == load_sample("partial_update")["issue"]["key"]
+
+    def test_payload_parsing_rejects_nul_and_non_objects(self) -> None:
+        from branchops.application.commands.ingest_webhook import InvalidWebhookPayloadError, parse_payload
+
+        with pytest.raises(InvalidWebhookPayloadError, match="NUL"):
+            parse_payload(b'{"a": "x\\u0000y"}')
+        with pytest.raises(InvalidWebhookPayloadError, match="object"):
+            parse_payload(b"[1]")
+        assert parse_payload('{"a": "ş"}'.encode()) == {"a": "ş"}
+
     def test_adf_description(self) -> None:
         ev = JiraWebhookAdapter(MAPPING).normalize(load_sample("cloud_adf_issue"))
         desc = ev.issue_fields["description"]

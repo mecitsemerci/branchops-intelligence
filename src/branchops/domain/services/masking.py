@@ -97,6 +97,9 @@ class SensitiveDataMasker:
             out = pattern.sub(extra, out)
         return MaskingResult(text=out, counts=counts)
 
+    def mask_str(self, text: str) -> str:
+        return self.mask(text).text
+
     def mask_text(self, text: str | None) -> str | None:
         if text is None:
             return None

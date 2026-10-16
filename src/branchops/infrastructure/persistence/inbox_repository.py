@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from branchops.domain.entities.incident import incident_key
 from branchops.domain.enums import InboxStatus
 from branchops.infrastructure.database.models import WebhookInbox
+
+FINISHED_STATUSES = (InboxStatus.COMPLETED.value, InboxStatus.SKIPPED.value, InboxStatus.DEAD_LETTER.value)
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,10 @@ _REAP_SQL = text(
         last_error = coalesce(last_error || E'\n', '') || 'lease expired (worker crash or timeout)',
         lease_owner = NULL,
         lease_expires_at = NULL,
-        available_at = now()
+        available_at = now(),
+        processed_at = CASE WHEN attempts >= max_attempts THEN now() ELSE processed_at END
     WHERE status = 'PROCESSING' AND lease_expires_at < now()
-    RETURNING id
+    RETURNING id, status
     """
 )
 
@@ -217,6 +221,7 @@ class InboxRepository:
         *,
         error: str,
         retry_in_seconds: float | None,
+        redacted_payload: dict[str, Any] | None = None,
     ) -> InboxStatus:
         """Schedule a retry (``retry_in_seconds``) or dead-letter the event (``None``)."""
         status = InboxStatus.PENDING if retry_in_seconds is not None else InboxStatus.DEAD_LETTER
@@ -230,6 +235,9 @@ class InboxRepository:
             values["available_at"] = func.now() + _seconds(retry_in_seconds)
         else:
             values["processed_at"] = func.now()
+            if redacted_payload is not None:  # dead letters keep only the masked payload
+                values["payload"] = redacted_payload
+                values["payload_redacted"] = True
         session.execute(
             update(WebhookInbox)
             .where(
@@ -262,7 +270,64 @@ class InboxRepository:
         )
 
     def reap_expired_leases(self, session: Session) -> int:
-        return len(session.execute(_REAP_SQL).all())
+        return len(self.reap_expired(session))
+
+    def reap_expired(self, session: Session) -> list[tuple[uuid.UUID, str]]:
+        """Return expired leases to PENDING (or DEAD_LETTER at max attempts); ``[(id, new status)]``."""
+        return [(r.id, r.status) for r in session.execute(_REAP_SQL).all()]
+
+    def redact(self, session: Session, event_ids: list[uuid.UUID], mask: Callable[[Any], Any]) -> int:
+        """Mask the stored payload of finished events still holding the raw one (e.g. reaped dead letters)."""
+        if not event_ids:
+            return 0
+        rows = session.execute(
+            select(WebhookInbox.id, WebhookInbox.payload).where(
+                WebhookInbox.id.in_(event_ids),
+                WebhookInbox.payload_redacted.is_(False),
+                WebhookInbox.status.in_(FINISHED_STATUSES),
+            )
+        ).all()
+        for row in rows:
+            session.execute(
+                update(WebhookInbox)
+                .where(WebhookInbox.id == row.id)
+                .values(payload=mask(row.payload), payload_redacted=True)
+                .execution_options(synchronize_session=False)
+            )
+        return len(rows)
+
+    def purge_finished(self, session: Session, *, completed_days: int, dead_letter_days: int) -> int:
+        """Delete finished events (and their LangGraph checkpoints) older than the retention windows.
+
+        Deleting a row also forgets its idempotency key: a delivery re-sent after the retention window is
+        accepted again, which the snapshot merge (per-attribute versions) makes harmless.
+        """
+        ids = list(
+            session.execute(
+                select(WebhookInbox.id).where(
+                    (
+                        WebhookInbox.status.in_([InboxStatus.COMPLETED.value, InboxStatus.SKIPPED.value])
+                        & (WebhookInbox.processed_at < func.now() - _seconds(completed_days * 86400))
+                    )
+                    | (
+                        (WebhookInbox.status == InboxStatus.DEAD_LETTER.value)
+                        & (
+                            func.coalesce(WebhookInbox.processed_at, WebhookInbox.received_at)
+                            < func.now() - _seconds(dead_letter_days * 86400)
+                        )
+                    )
+                )
+            ).scalars()
+        )
+        if not ids:
+            return 0
+        threads = [f"inbox:{i}" for i in ids]
+        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+            if session.execute(text("SELECT to_regclass(:t)"), {"t": table}).scalar() is not None:
+                stmt = text(f"DELETE FROM {table} WHERE thread_id = ANY(:threads)")  # noqa: S608 - fixed names
+                session.execute(stmt, {"threads": threads})
+        session.execute(delete(WebhookInbox).where(WebhookInbox.id.in_(ids)))
+        return len(ids)
 
     def replay(self, session: Session, event_id: uuid.UUID) -> bool:
         result = session.execute(
@@ -276,6 +341,7 @@ class InboxRepository:
                 attempts=0,
                 available_at=func.now(),
                 processed_at=None,
+                outcome=None,  # last_error is kept for the investigation trail
             )
             .execution_options(synchronize_session=False)
         )

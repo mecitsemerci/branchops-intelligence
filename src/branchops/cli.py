@@ -114,7 +114,20 @@ def start_outbox_drainers(container: Any, owner: str) -> list[Any]:
         with db.session() as s:
             return attachments.purge(s)
 
-    tasks: list[Any] = [PeriodicTask("attachment-retention", purge, 3600.0)]
+    def purge_inbox() -> dict[str, int]:
+        from branchops.infrastructure.persistence.inbox_repository import InboxRepository
+
+        retention = settings.retention
+        with db.session() as s:
+            deleted = InboxRepository().purge_finished(
+                s, completed_days=retention.inbox_days, dead_letter_days=retention.inbox_dead_letter_days
+            )
+        return {"inbox_events_deleted": deleted}
+
+    tasks: list[Any] = [
+        PeriodicTask("attachment-retention", purge, 3600.0),
+        PeriodicTask("inbox-retention", purge_inbox, 3600.0),
+    ]
     if settings.notifications.enabled:
         from branchops.application.commands.notifications import NOTIFICATION_OUTBOX
         from branchops.infrastructure.notifications import build_channels
@@ -158,6 +171,25 @@ def check_notification_readiness(container: Any) -> None:
     errors = [f.message for f in findings if f.level == "error"]
     if errors:
         raise SystemExit("refusing to start: " + "; ".join(errors))
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    from branchops.container import Container
+    from branchops.infrastructure.persistence.inbox_repository import InboxRepository
+
+    settings = _settings(args)
+    container = Container.build(settings)
+    try:
+        with container.db.session() as s:
+            deleted = InboxRepository().purge_finished(
+                s,
+                completed_days=settings.retention.inbox_days,
+                dead_letter_days=settings.retention.inbox_dead_letter_days,
+            )
+        print(json.dumps({"inbox_events_deleted": deleted}))
+    finally:
+        container.close()
+    return 0
 
 
 def cmd_attachments(args: argparse.Namespace) -> int:
@@ -504,6 +536,9 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--source", default=None, help="only this source (default: all enabled pull sources)")
     poll.add_argument("--once", action="store_true", help="poll every source once and exit")
     poll.set_defaults(func=cmd_poll)
+    inbox = sub.add_parser("inbox", help="inbox utilities")
+    inbox.add_argument("inbox_command", choices=["purge"], help="apply retention.inbox_days now")
+    inbox.set_defaults(func=cmd_inbox)
     att = sub.add_parser("attachments", help="attachment utilities")
     att.add_argument("attachments_command", choices=["purge"])
     att.set_defaults(func=cmd_attachments)

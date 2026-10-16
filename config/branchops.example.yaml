@@ -126,8 +126,10 @@ ticketing:
 retention:
   on_issue_deleted: soft_delete    # soft_delete | purge
   redact_deleted_comments: true
-  redact_inbox_payload_after_processing: true
+  redact_inbox_payload_after_processing: true   # also applies to dead letters
   attachments_days: 180
+  inbox_days: 30                   # finished inbox events (and their workflow checkpoints)
+  inbox_dead_letter_days: 90       # dead letters stay inspectable / replayable this long
 
 worker:
   concurrency: 2

@@ -11,6 +11,7 @@ from branchops.agents.base import StructuredCaller
 from branchops.application.interfaces.model_provider import ModelProvider
 from branchops.application.interfaces.source_adapter import SourceRegistry
 from branchops.config.settings import Settings
+from branchops.domain.services.masking import SensitiveDataMasker
 from branchops.infrastructure.database.session import Database, create_db_engine
 from branchops.infrastructure.llm.mock_provider import MockModelProvider
 from branchops.infrastructure.llm.openai_compatible import OpenAICompatibleModelProvider
@@ -95,6 +96,7 @@ class Container:
             settings=self.settings.workflow,
             checkpointer=checkpointer,
             progress=DatabaseProgressReporter(self.db),
+            text_filter=SensitiveDataMasker(self.settings.security.masking_extra_patterns).mask_str,
         )
 
     def close(self) -> None:

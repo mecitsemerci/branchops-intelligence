@@ -117,7 +117,10 @@ class IssueAnalysisWorkflow:
         settings: WorkflowSettings,
         checkpointer: Any = None,
         progress: ProgressReporter | None = None,
+        text_filter: Callable[[str], str] | None = None,
     ) -> None:
+        """``text_filter`` (PII masking) is applied to error text and to every text the model wrote before
+        anything is stored: model output is untrusted and may echo or invent personal data."""
         self._caller = caller
         self._registry = registry
         self._policy = policy
@@ -131,6 +134,7 @@ class IssueAnalysisWorkflow:
         self._recommender = RecommendationAgent(caller)
         self._checkpointer = checkpointer
         self._progress: ProgressReporter = progress or NullProgressReporter()
+        self._filter: Callable[[str], str] = text_filter or (lambda t: t)
         self.graph = self._build().compile(checkpointer=checkpointer)
 
     @property
@@ -216,7 +220,9 @@ class IssueAnalysisWorkflow:
             try:
                 final: AnalysisState = self.graph.invoke(inputs, config)  # type: ignore[assignment]
             except Exception as exc:
-                self._progress.run_failed(initial["analysis_id"], f"{type(exc).__name__}: {exc}")
+                self._progress.run_failed(
+                    initial["analysis_id"], self._filter(f"{type(exc).__name__}: {exc}")
+                )
                 raise
         if self._checkpointer is not None:
             try:
@@ -239,8 +245,10 @@ class IssueAnalysisWorkflow:
         except ModelUnavailableError as exc:
             if not state.get("allow_degraded", False):
                 raise
-            return None, timer.record(StepStatus.FAILED, error=str(exc)), f"{step}: {exc}"
+            message = self._filter(str(exc))
+            return None, timer.record(StepStatus.FAILED, error=message), f"{step}: {message}"
         except _RECOVERABLE as exc:
+            message = self._filter(str(exc))
             usage = getattr(exc, "usage", None)
             record = timer.record(
                 StepStatus.FAILED,
@@ -248,9 +256,9 @@ class IssueAnalysisWorkflow:
                 model_id=self.model_id,
                 prompt_tokens=usage.prompt_tokens if usage else 0,
                 completion_tokens=usage.completion_tokens if usage else 0,
-                error=str(exc),
+                error=message,
             )
-            return None, record, f"{step}: {exc}"
+            return None, record, f"{step}: {message}"
         if stats is None:
             return value, timer.record(StepStatus.SKIPPED), None
         record = timer.record(
@@ -515,6 +523,16 @@ class IssueAnalysisWorkflow:
             else None
         )
         status = state.get("status") or self._final_status(state).value
+        f = self._filter
+        classification = Classification.model_validate(cls) if cls else None
+        if classification is not None and classification.rationale:
+            classification = classification.model_copy(update={"rationale": f(classification.rationale)})
+        assessments = [FieldAssessment.model_validate(a) for a in state.get("validated_assessments", [])]
+        assessments = [a.model_copy(update={"reason": f(a.reason)}) if a.reason else a for a in assessments]
+        recommendations = [Recommendation.model_validate(r) for r in state.get("recommendations", [])]
+        recommendations = [r.model_copy(update={"message": f(r.message)}) for r in recommendations]
+        similar = [SimilarIssue.model_validate(s) for s in state.get("similar", [])]
+        similar = [s.model_copy(update={"rationale": f(s.rationale)}) if s.rationale else s for s in similar]
         return AnalysisResult(
             analysis_id=state["analysis_id"],
             incident_key=state["incident_key"],
@@ -525,13 +543,13 @@ class IssueAnalysisWorkflow:
             started_at=datetime.fromisoformat(state["started_at"]),
             completed_at=datetime.now(UTC),
             status=AnalysisStatus(status),
-            classification=Classification.model_validate(cls) if cls else None,
+            classification=classification,
             template_id=state.get("template_id"),
             template_version=state.get("template_version"),
             scores=ScoreResult.model_validate(state["scores"]) if state.get("scores") else None,
-            assessments=[FieldAssessment.model_validate(a) for a in state.get("validated_assessments", [])],
-            recommendations=[Recommendation.model_validate(r) for r in state.get("recommendations", [])],
-            similar_issues=[SimilarIssue.model_validate(s) for s in state.get("similar", [])],
+            assessments=assessments,
+            recommendations=recommendations,
+            similar_issues=similar,
             recurring=state.get("recurring", False),
             recurring_count=state.get("recurring_count", 0),
             security_flags=state.get("security_flags", []),

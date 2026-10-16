@@ -239,7 +239,9 @@ class JiraWebhookAdapter:
         if project_key is None and issue_key:
             project_key = str(issue_key).split("-")[0]
 
-        changelog_items = (payload.get("changelog") or {}).get("items") or []
+        # A malformed changelog (list, string) is treated as absent instead of failing the whole event.
+        changelog = payload.get("changelog")
+        changelog_items = (changelog.get("items") if isinstance(changelog, Mapping) else None) or []
         changed: dict[str, Any] = {}
         for item in changelog_items if isinstance(changelog_items, list) else []:
             if not isinstance(item, dict):

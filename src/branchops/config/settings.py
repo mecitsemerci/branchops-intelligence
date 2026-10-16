@@ -269,6 +269,10 @@ class RetentionSettings(BaseModel):
     redact_inbox_payload_after_processing: bool = True
     # Attachments (and unbound draft uploads) older than this are purged by the worker / CLI.
     attachments_days: int = Field(default=180, ge=1)
+    # Finished inbox events (raw source payloads, masked after processing) and their LangGraph checkpoints.
+    # Dead letters are kept longer so that they can still be inspected and replayed.
+    inbox_days: int = Field(default=30, ge=1)
+    inbox_dead_letter_days: int = Field(default=90, ge=1)
 
 
 class WorkerSettings(BaseModel):

@@ -107,6 +107,7 @@ class EvaluationRunner:
             sink=sink,
             settings=self._settings.workflow,
             checkpointer=None,
+            text_filter=self._masker.mask_str,
         )
 
     def run(self, dataset: EvalDataset) -> EvaluationRun:

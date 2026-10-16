@@ -124,9 +124,20 @@ class EventProcessor:
                 lock_conn.commit()
 
     def _redacted(self, item: InboxItem) -> dict[str, Any] | None:
+        redacted: dict[str, Any] | None = self.redact_payload(item.payload)
+        return redacted
+
+    def redact_payload(self, payload: Any) -> Any:
+        """Masked copy of a stored payload, or ``None`` when redaction is disabled by configuration."""
         if not self._settings.retention.redact_inbox_payload_after_processing:
             return None
-        return mask_json(item.payload, self._masker)  # type: ignore[no-any-return]
+        return mask_json(payload, self._masker)
+
+    def safe_error(self, text: str) -> str:
+        """Error text fit for storage: PII masked and SQL parameter dumps cut (exception messages from the
+        database driver embed the bound values, i.e. incident text)."""
+        text = text.split("\n[parameters:", 1)[0].split("\n[SQL:", 1)[0]
+        return (self._masker.mask_text(text) or "")[:4000]
 
     def _process_locked(self, item: InboxItem, incident_key: str) -> ProcessOutcome:
         event_type = IncidentEventType(item.event_type)
