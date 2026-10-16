@@ -1,9 +1,11 @@
 # Agents and workflow
 
 BranchOps uses **logical agents**: each is a prompt + an output schema + deterministic post-processing,
-orchestrated by a fixed LangGraph pipeline. No agent has tools, memory, database access or the ability to
-change control flow. The model is used for language understanding only; every decision that affects a
-number or an action is made by Python.
+orchestrated by a fixed LangGraph pipeline. No agent has database access or the ability to change control
+flow. Only the optional `investigate` step gives the model tools: allow-listed, read-only, bounded
+(see [Adaptive investigation](#adaptive-investigation-agentsinvestigationpy-optional)); every other agent
+is structured-output only. The model is used for language understanding only; every decision that affects
+a number or an action is made by Python.
 
 ## Workflow
 
@@ -70,7 +72,8 @@ finished step. Each graph node is wrapped (`_tracked`) to report start/finish; f
 
 ### Adaptive investigation (`agents/investigation.py`, optional)
 
-`workflow.investigation.enabled` is off by default. When it is on, the `investigate` step runs only if the
+`workflow.investigation.enabled` is off by default (and in the production template); the demo configurations
+(`config/docker.yaml`, `config/local.yaml`) turn it on. When it is on, the `investigate` step runs only if the
 similarity step found a duplicate, related or possible-common-cause incident, or a recurring error
 signature. Otherwise it is recorded as `SKIPPED` and costs nothing.
 

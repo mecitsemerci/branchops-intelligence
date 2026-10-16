@@ -369,11 +369,23 @@ class MockModelProvider:
         return {"verdicts": verdicts}
 
     def _investigate(self, prompt: str) -> dict[str, Any]:
-        """Look at the first candidate once, then conclude: one quoted observation, one hypothesis."""
-        payload = parse_json_block(prompt, "candidates") or {}
+        """Look at the first candidate once, then conclude: one quoted observation, one hypothesis.
+
+        Anything the mock cannot turn into a valid tool call (unparsable blocks, no usable candidate key,
+        an exhausted budget) ends in a valid conclusion, so the step never fails in mock mode.
+        """
+        payload = parse_json_block(prompt, "candidates")
+        if not isinstance(payload, dict):
+            payload = {}
         history = parse_json_block(prompt, "history") or []
-        candidates = payload.get("candidates") or []
-        if candidates and not history and not payload.get("must_conclude"):
+        candidates = [
+            c
+            for c in payload.get("candidates") or []
+            if isinstance(c, dict) and isinstance(c.get("incident_key"), str) and c["incident_key"]
+        ]
+        remaining = payload.get("remaining_tool_calls", 1)
+        can_call = not payload.get("must_conclude") and isinstance(remaining, int) and remaining > 0
+        if candidates and not history and can_call:
             key = candidates[0]["incident_key"]
             return {"action": "call_tool", "tool": "get_issue_summary", "arguments": {"incident_key": key}}
         findings: list[dict[str, Any]] = []

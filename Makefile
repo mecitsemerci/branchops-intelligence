@@ -111,7 +111,7 @@ up: model ## Start the stack (LLM_MODE=docker|host|mock, VLLM_DEVICE=cpu|gpu, WO
 	@echo "  API          http://localhost:$${API_PORT:-8080}   (health: /health/ready, metrics: /metrics)"
 	@echo "  MCP server   http://localhost:$${MCP_PORT:-8095}/mcp   (dev auth; health: /readyz)"
 	@echo "  Postgres     localhost:$(POSTGRES_PORT)  (branchops/branchops)"
-	@echo "  Model        $(LLM_MODE) · $${LLM_MODEL:-$${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}} · $(LLM_BASE_URL)"
+	@echo "  Model        $(if $(filter mock,$(LLM_MODE)),mock (deterministic keyword rules),$(LLM_MODE) · $${LLM_MODEL:-$${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}} · $(LLM_BASE_URL))"
 	@echo "  Simulator    one random incident every $${SIMULATOR_INTERVAL_SECONDS:-300}s (make sim-once for one now)"
 
 .PHONY: sim-once
@@ -156,6 +156,10 @@ migrate: ## Run migrations + template publication in the stack
 seed: ## Send signed sample Jira webhooks to the API
 	$(PYTHON) scripts/send_samples.py --url $(API_URL) --secret $(WEBHOOK_SECRET)
 
+.PHONY: seed-demo
+seed-demo: seed ## Samples plus demo teams, screens and two in-app reports via MCP (fills /yonetim, /bildirimler)
+	$(BIN)/python scripts/seed_demo_ownership.py --api-url $(API_URL) --mcp-url http://localhost:$${MCP_PORT:-8095}/mcp
+
 .PHONY: health
 health: mcp-health ## Probe api, worker, dashboard and mcp health endpoints
 	@curl -fsS $(API_URL)/health/ready && echo "  <- api"
@@ -169,6 +173,18 @@ mcp-health: ## Probe the MCP server (readiness + tools/list over streamable HTTP
 	  -H 'accept: application/json, text/event-stream' \
 	  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 	  | $(PYTHON) -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']), 'tools')" && echo "  <- mcp tools"
+
+.PHONY: screenshots
+screenshots: ## README screenshots from the running stack (once: .venv/bin/playwright install chromium)
+	$(BIN)/python scripts/capture_screenshots.py --dashboard-url http://localhost:$${DASHBOARD_PORT:-8090} \
+	  --api-url $(API_URL) --out docs/screenshots
+	{ echo '$$ make mcp-health'; $(MAKE) -s mcp-health; echo; echo '$$ python scripts/mcp_catalogue.py'; \
+	  $(BIN)/python scripts/mcp_catalogue.py --url http://localhost:$${MCP_PORT:-8095}/mcp; } 2>&1 \
+	  | $(BIN)/python scripts/render_terminal.py --title "MCP server: health and catalogue" \
+	    --out docs/screenshots/09-mcp-tools.png
+	{ echo '$$ branchops report --days 30'; $(COMPOSE) exec -T worker branchops report --days 30 2>/dev/null | grep -v '^{"ts"'; } \
+	  | $(BIN)/python scripts/render_terminal.py --title "branchops report --days 30" \
+	    --out docs/screenshots/10-report.png
 
 .PHONY: overview
 overview: ## Print the analytics overview from the API
