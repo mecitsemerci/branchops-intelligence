@@ -15,7 +15,7 @@ from branchops.application.interfaces.investigation import HistoryItem
 from branchops.application.interfaces.model_provider import CompletionRequest
 from branchops.domain.enums import StepStatus
 from branchops.templates.registry import TemplateRegistry
-from tests.helpers import InMemoryHistory, MemorySink, ScriptedProvider, make_settings
+from tests.helpers import ROOT, InMemoryHistory, MemorySink, ScriptedProvider, make_settings
 from tests.unit.test_agents import _candidate
 from tests.unit.test_workflow import initial, snapshot_from
 
@@ -224,3 +224,60 @@ class TestWorkflowStep:
         for tool in ("search_history", "get_issue_summary", "issue_metadata", "known_resolutions"):
             assert tool in schema
         assert "sql" not in schema.lower()
+
+
+class TestMockProviderDrivesInvestigation:
+    """LLM_MODE=mock: the mock must make the investigate step succeed or skip, never fail."""
+
+    @staticmethod
+    def _ask(prompt: str) -> Any:
+        from branchops.agents.investigation import InvestigationOutput
+        from branchops.application.interfaces.model_provider import ChatMessage
+        from branchops.infrastructure.llm.mock_provider import MockModelProvider
+
+        request = CompletionRequest(
+            messages=[ChatMessage("user", prompt)],
+            agent="investigation",
+            correlation_id="c",
+            schema_name="InvestigationOutput",
+        )
+        content = MockModelProvider().complete(request).content
+        return InvestigationOutput.model_validate_json(content, context={"must_conclude": True})
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "",
+            "<candidates>not json</candidates>",
+            '<candidates>{"candidates": [{"summary": "anahtar yok"}], "must_conclude": false}</candidates>',
+            '<candidates>{"candidates": [{"incident_key": "jira:OLD-1"}], "remaining_tool_calls": 0}'
+            "</candidates>",
+        ],
+    )
+    def test_concludes_when_no_valid_tool_call_is_possible(self, prompt: str) -> None:
+        assert self._ask(prompt).action == "conclude"
+
+    def test_demo_configuration_completes_the_step(self, registry: TemplateRegistry) -> None:
+        import yaml
+
+        from branchops.infrastructure.llm.mock_provider import MockModelProvider
+        from branchops.workflows.issue_analysis import IssueAnalysisWorkflow
+
+        docker = yaml.safe_load((ROOT / "config" / "docker.yaml").read_text("utf-8"))
+        demo = docker["workflow"]["investigation"]
+        assert demo["enabled"] is True
+        settings = make_settings(workflow={"investigation": demo})
+        wf = IssueAnalysisWorkflow(
+            caller=StructuredCaller(MockModelProvider()),
+            registry=registry,
+            policy=settings.scoring,
+            history=InMemoryHistory([_candidate("jira:BOPS-90")]),
+            sink=MemorySink(),
+            settings=settings.workflow,
+            investigation_reader=FakeReader(),
+        )
+        result = wf.run(initial(snapshot_from("complete_incident")), thread_id="inv-mock")
+        step = next(s for s in result.steps if s.step == "investigate")
+        assert step.status is StepStatus.SUCCEEDED
+        assert result.investigation is not None and result.investigation.status == "COMPLETED"
+        assert [c.tool for c in result.investigation.tool_calls] == ["get_issue_summary"]

@@ -48,6 +48,12 @@ workflow:
   node_timeout_seconds: 600
   max_repair_attempts: 1
   max_input_chars: 12000
+  # Demo: the agentic investigation step is on. It runs only when the similarity step found related
+  # history, calls allow-listed read-only tools and is bounded (defaults kept: 4 tool calls, 3 turns).
+  investigation:
+    enabled: true
+    max_tool_calls: 4
+    max_depth: 3
 worker:
   concurrency: ${WORKER_CONCURRENCY:-1}   # one local model instance: process one issue at a time
   poll_interval_seconds: 1

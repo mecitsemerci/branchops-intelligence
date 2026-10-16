@@ -72,7 +72,8 @@ finished step. Each graph node is wrapped (`_tracked`) to report start/finish; f
 
 ### Adaptive investigation (`agents/investigation.py`, optional)
 
-`workflow.investigation.enabled` is off by default. When it is on, the `investigate` step runs only if the
+`workflow.investigation.enabled` is off by default (and in the production template); the demo configurations
+(`config/docker.yaml`, `config/local.yaml`) turn it on. When it is on, the `investigate` step runs only if the
 similarity step found a duplicate, related or possible-common-cause incident, or a recurring error
 signature. Otherwise it is recorded as `SKIPPED` and costs nothing.
 

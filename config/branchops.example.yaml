@@ -188,6 +188,9 @@ workflow:
       top_k: 10
       min_score: 0.75
   # Optional bounded history investigation (read-only tools; only when related history exists).
+  # Off in production until real-model evaluations (docs/evaluation.md) show its findings help reviewers:
+  # it adds up to max_depth+1 model calls per related incident on the shared gateway. The demo configs
+  # (config/docker.yaml, config/local.yaml) turn it on.
   investigation:
     enabled: false
     max_tool_calls: 4
