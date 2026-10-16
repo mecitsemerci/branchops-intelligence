@@ -1,0 +1,74 @@
+[
+  {
+    "page": "01-overview",
+    "file": "01-overview.png",
+    "url": "http://localhost:8090/",
+    "timestamp": "2026-10-16T22:02:10+00:00",
+    "width": 2880,
+    "height": 2310,
+    "bytes": 214724
+  },
+  {
+    "page": "02-live-agents",
+    "file": "02-live-agents.png",
+    "url": "http://localhost:8090/live",
+    "timestamp": "2026-10-16T22:02:13+00:00",
+    "width": 2880,
+    "height": 3610,
+    "bytes": 716716
+  },
+  {
+    "page": "03-issues",
+    "file": "03-issues.png",
+    "url": "http://localhost:8090/issues",
+    "timestamp": "2026-10-16T22:02:16+00:00",
+    "width": 2880,
+    "height": 2488,
+    "bytes": 404249
+  },
+  {
+    "page": "04-issue-detail",
+    "file": "04-issue-detail.png",
+    "url": "http://localhost:8090/issues/app:RPT-5N2ULX4KWI",
+    "timestamp": "2026-10-16T22:02:19+00:00",
+    "width": 2880,
+    "height": 3962,
+    "bytes": 496080
+  },
+  {
+    "page": "05-analytics",
+    "file": "05-analytics.png",
+    "url": "http://localhost:8090/analytics",
+    "timestamp": "2026-10-16T22:02:22+00:00",
+    "width": 2880,
+    "height": 6366,
+    "bytes": 639577
+  },
+  {
+    "page": "06-executions",
+    "file": "06-executions.png",
+    "url": "http://localhost:8090/executions",
+    "timestamp": "2026-10-16T22:02:25+00:00",
+    "width": 2880,
+    "height": 2764,
+    "bytes": 514484
+  },
+  {
+    "page": "07-ownership-admin",
+    "file": "07-ownership-admin.png",
+    "url": "http://localhost:8090/yonetim",
+    "timestamp": "2026-10-16T22:02:28+00:00",
+    "width": 2880,
+    "height": 1800,
+    "bytes": 195616
+  },
+  {
+    "page": "08-notifications",
+    "file": "08-notifications.png",
+    "url": "http://localhost:8090/bildirimler",
+    "timestamp": "2026-10-16T22:02:30+00:00",
+    "width": 2880,
+    "height": 1966,
+    "bytes": 294623
+  }
+]

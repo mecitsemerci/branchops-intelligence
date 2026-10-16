@@ -101,6 +101,8 @@ frozenlist==1.8.0
     #   aiosignal
 googleapis-common-protos==1.75.5
     # via opentelemetry-exporter-otlp-proto-http
+greenlet==3.5.6
+    # via playwright
 h11==0.16.0
     # via
     #   httpcore
@@ -289,6 +291,8 @@ pillow==12.3.0
     # via branchops-intelligence (pyproject.toml)
 platformdirs==4.13.0
     # via fastmcp
+playwright==1.64.0
+    # via branchops-intelligence (pyproject.toml)
 pluggy==1.6.0
     # via pytest
 prometheus-client==0.26.0
@@ -344,6 +348,8 @@ pydantic-settings==2.16.0
     #   mcp
 pydocket==0.27.0
     # via fastmcp
+pyee==14.0.0
+    # via playwright
 pygments==2.21.0
     # via
     #   nicegui
@@ -472,6 +478,7 @@ typing-extensions==4.16.0
     #   pydantic-core
     #   pydantic-settings
     #   pydocket
+    #   pyee
     #   referencing
     #   sqlalchemy
     #   starlette
