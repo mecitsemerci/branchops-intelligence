@@ -60,6 +60,8 @@ The **Status** column records what this change set did with each finding (see th
 | ANA-1 | Analytics | No application-level trend, per-period branch trends or per-category missing fields | Gap | P2 | Implemented |
 | ANA-2 | Analytics | Jira status / resolution history is not captured, so reopen and recurrence-after-resolution cannot be computed | Confirmed | P2 | Implemented (status history from the webhook payload) |
 | RET-1 | Retention | No retention for `analyses`, `agent_steps`, `audit_log`, outboxes, LangGraph checkpoints of failed runs | Confirmed | P2 | Partly (inbox, failed checkpoints); rest recommended |
+| ING-5 | Ingestion | *Found during this work:* purging inbox rows forgets idempotency keys, so a captured signed delivery could be re-submitted after retention | Confirmed | P1 | Fixed (fail-closed replay window `webhook.max_event_age_days` < `retention.inbox_days`) |
+| SEC-4 | Security | *Found during this work:* investigation findings quote other incidents, and team-scoped callers must not receive them | Confirmed | P1 | Fixed (only unrestricted callers get the investigation) |
 
 ## Findings
 
@@ -232,7 +234,8 @@ authentication.
   * A versioned Turkish domain lexicon expands the query with synonyms (deterministic, no download).
   * An optional `EmbeddingProvider` port with an OpenAI-compatible internal endpoint (`similarity.embeddings`,
     off by default, URL-guarded). Vectors are stored in `issue_embeddings` (a `REAL[]` column, no pgvector
-    required) and fused with the lexical rank (reciprocal rank fusion).
+    required). Semantic hits are added to the lexical candidates with a `semantic_score` and the
+    `semantic_match` signal. Ranking is still done by the deterministic shortlist, not by score fusion.
   * The new relationship POSSIBLE_COMMON_CAUSE. A RELATED verdict without any shared application, signature
     or branch is downgraded to POSSIBLE_COMMON_CAUSE.
   * The duplicate gate needs the same application or the same error signature; same subcategory is no longer

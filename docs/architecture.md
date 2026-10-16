@@ -121,7 +121,9 @@ src/branchops/
   infrastructure/ SQLAlchemy models/session, repositories, source adapters (sources/jira, servicenow, csv_import,
                   mcp_report), LLM providers, attachments, notifications, ticketing, security, observability
                   (jira/adapter.py is a deprecated re-export shim of sources/jira)
-  workers/        dispatcher (claim loop, health server), per-event runner (leases, retries), pull-source poller
+  workers/        dispatcher (claim loop, graceful drain, health server), per-event runner (leases, retries),
+                  pull-source poller, model-outage recovery scheduler, housekeeping (retention)
+  evaluation/     offline evaluation: datasets, record/replay providers, metrics, calibration, reports
   dashboard/      NiceGUI pages and components
   mcp/            MCP server: auth/teams, read tools, reporting / ownership tools, resources, prompts, audit middleware
   config/         settings (YAML + env interpolation, production guards)

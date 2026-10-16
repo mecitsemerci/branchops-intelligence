@@ -16,6 +16,12 @@
 | End-to-end: API validation, vertical slice, partial/out-of-order/comment events, deletion policies, outage → degraded, RBAC, template immutability, Postgres checkpoint resume | `tests/integration/test_end_to_end.py` | PostgreSQL |
 | Evaluation framework (metrics, dataset, record/replay, attribution) | `tests/unit/test_evaluation.py` | — |
 | Score calibration (generic vs specific, policy history, UNKNOWN vs MISSING) | `tests/unit/test_calibration.py` | — |
+| Ingestion reliability: rejected requests persist nothing, header-swap replay, replay window, poison message, retry exhaustion, reaper dead letter, crash recovery, per-issue lock, graceful drain, retention | `tests/integration/test_ingestion_reliability.py` | PostgreSQL |
+| Model recovery: outage → provisional → recovery, redelivery, latest-analysis protection, bounds, lost events, stale runs | `tests/integration/test_model_recovery.py`, `tests/unit/test_recovery.py` | PostgreSQL / — |
+| Hybrid similarity: lexicon, relationship bounds, evidence, embeddings provider and fallback, Turkish synonym retrieval | `tests/unit/test_similarity_hybrid.py`, `tests/integration/test_similarity_retrieval.py` | — / PostgreSQL |
+| Investigation: allow-list, budgets, cancellation, evidence-checked findings, masking, scope | `tests/unit/test_investigation.py`, `tests/integration/test_investigation_db.py` | — / PostgreSQL |
+| Operational analytics: status history, reopen, recurrence after resolution, UNKNOWN | `tests/integration/test_operational_analytics.py` | PostgreSQL |
+| OpenShift manifests: security context, resources, probes, grace periods, skip-auth routes | `tests/unit/test_deploy_manifests.py` | — |
 | Real model smoke tests | `tests/integration/test_llm_endpoint.py` | internal LLM (`BRANCHOPS_LLM_INTEGRATION=1`) |
 
 All automated tests use the mock or scripted provider; none needs a model endpoint.
