@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -131,6 +132,33 @@ class TestAuthentication:
         payload = {**load_sample("partial_update"), "changelog": ["not", "an", "object"]}
         assert post(client, payload).status_code == 202
         assert inbox_count(db) == 1
+
+
+class TestReplayWindow:
+    def test_signed_events_older_than_the_window_are_ignored(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A captured delivery cannot be re-submitted once its idempotency key may have been purged."""
+        monkeypatch.setenv("JIRA_WEBHOOK_SECRETS", SECRET)
+        settings = make_settings(
+            database={"url": str(db.engine.url.render_as_string(hide_password=False))},
+            webhook={"max_event_age_days": 7},
+            retention={"inbox_days": 30},
+        )
+        container = Container.build(settings)
+        try:
+            with TestClient(create_app(settings, container)) as c:
+                old = {**load_sample("complete_incident"), "timestamp": 1_600_000_000_000}  # 2020
+                r = post(c, old)
+                assert r.status_code == 200 and r.json()["status"] == "ignored"
+                assert "replay protection" in r.json()["reason"]
+                fresh = {**load_sample("complete_incident"), "timestamp": int(time.time() * 1000)}
+                assert post(c, fresh).status_code == 202
+        finally:
+            container.close()
+        assert inbox_count(db) == 1
+        with pytest.raises(ValueError, match="max_event_age_days"):
+            make_settings(webhook={"max_event_age_days": 30}, retention={"inbox_days": 30})
 
 
 class TestPoisonAndRetries:

@@ -42,6 +42,10 @@ def make_settings(**overrides: Any) -> Settings:
         "jira": {"field_mapping": {"branch_code": "customfield_10101", "application": "customfield_10102"}},
         "workflow": {"checkpointer": "memory"},
         "worker": {"backoff_base_seconds": 0.01, "backoff_max_seconds": 0.05, "max_attempts": 3},
+        # The sample payloads carry fixed 2026 timestamps: keep the replay window wide enough that they never
+        # age out (the window itself is tested in tests/integration/test_ingestion_reliability.py).
+        "webhook": {"max_event_age_days": 36_500},
+        "retention": {"inbox_days": 36_501},
     }
     for key, value in overrides.items():
         if isinstance(value, list):  # e.g. sources=[...]

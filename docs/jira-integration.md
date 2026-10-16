@@ -65,6 +65,12 @@ was authenticated:
 * **Token request:** `jira:delivery:<X-Atlassian-Webhook-Identifier>` when present, otherwise the payload
   digest.
 
+**Replay window.** An event whose own `timestamp` is older than `webhook.max_event_age_days` (7) is
+acknowledged with `200 ignored` and not stored. For signed requests the timestamp is part of the signed body.
+The setting must stay below `retention.inbox_days` (30), and startup is refused otherwise. This guarantees
+that a delivery is only accepted while its idempotency key is still in the inbox. Without the window, a
+captured delivery could be re-submitted once retention had purged its row.
+
 Rejected requests (401, 400, 413, 415) are never written to the database. They are only counted in
 `branchops_webhook_requests_total{outcome=…}` and logged without the body. A non-object `changelog`,
 deeply nested JSON and `\u0000` produce 400 or are ignored, never a server error.

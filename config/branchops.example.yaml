@@ -21,6 +21,7 @@ database:
 
 webhook:
   max_body_bytes: 1048576          # request size limit for every push source
+  max_event_age_days: 7             # older (signed) events are ignored; must be < retention.inbox_days
 
 # Incident sources. Each enabled push source accepts POST /api/ingest/<id> (Jira also keeps the legacy
 # URL /api/webhooks/jira); pull sources are read by `branchops poll` / `branchops import`.

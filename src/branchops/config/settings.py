@@ -53,6 +53,10 @@ class WebhookSettings(BaseModel):
     query_token_secrets_env: str = "JIRA_WEBHOOK_QUERY_TOKENS"
     max_body_bytes: int = 1_048_576
     allowed_source_cidrs: list[str] = Field(default_factory=list)
+    # Push events whose own (signed) timestamp is older than this are acknowledged and ignored. It must stay
+    # below ``retention.inbox_days``: an accepted event's idempotency key then always outlives its
+    # replay window, so a captured delivery cannot be re-submitted after its inbox row was purged.
+    max_event_age_days: int = Field(default=7, ge=1)
 
 
 class JiraSettings(BaseModel):
@@ -484,6 +488,15 @@ class Settings(BaseModel):
         for src in self.sources:
             if src.is_push and src.auth is None:
                 src.auth = SourceAuthSettings()
+        return self
+
+    @model_validator(mode="after")
+    def _replay_window(self) -> Settings:
+        if self.webhook.max_event_age_days >= self.retention.inbox_days:
+            raise ValueError(
+                "webhook.max_event_age_days must be lower than retention.inbox_days "
+                "(otherwise purged idempotency keys reopen a replay window)"
+            )
         return self
 
     @model_validator(mode="after")

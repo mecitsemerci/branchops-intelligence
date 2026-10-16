@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -119,6 +120,17 @@ class IngestIncidentEvent:
             # (A -> B -> A); unchanged re-imports are cheap no-ops in the worker (same analysis input hash).
             key = f"event:{payload_digest(stored)}"
 
+        max_age = timedelta(days=self._settings.webhook.max_event_age_days)
+        if (
+            payload is not None
+            and event.event_timestamp is not None
+            and event.event_timestamp < datetime.now(UTC) - max_age
+        ):
+            return IngestResult(
+                IngestOutcome.IGNORED,
+                correlation_id,
+                reason="event older than webhook.max_event_age_days (replay protection)",
+            )
         if event.event_type is IncidentEventType.UNSUPPORTED:
             return IngestResult(
                 IngestOutcome.IGNORED, correlation_id, reason=f"unsupported event {event.raw_event_name}"
