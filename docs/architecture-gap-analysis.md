@@ -54,7 +54,7 @@ The **Status** column records what this change set did with each finding (see th
 | OPS-1 | Deployment | No LLM availability signal (readiness ignores the model, which is right, but there is no gauge or alert either) | Confirmed | P1 | Implemented (`branchops_model_up`, alert example) |
 | OPS-2 | Deployment | Worker HPA scales on CPU, which barely moves for I/O-bound LLM work | Confirmed | P1 | Documented (queue-depth alternative); not changed |
 | OPS-3 | Deployment | No preStop / termination grace on api, dashboard and mcp | Risk | P2 | Fixed |
-| OPS-4 | Deployment | No CI pipeline in the repository | Confirmed | P2 | Recommended (blocked: CI system not specified) |
+| OPS-4 | Deployment | No CI pipeline in the repository | Confirmed | P2 | Fixed for the repository (GitHub Actions: lint, mypy, unit + PostgreSQL suites, manifests); the bank-internal pipeline is still unspecified |
 | OPS-5 | Deployment | Base image `:latest`, no digest pin | Risk | P2 | Documented |
 | OPS-6 | Deployment | Manual `oc apply -k` can start pods before the migrate Job finishes; no expand/contract rule for rollbacks | Risk | P1 | Documented |
 | ANA-1 | Analytics | No application-level trend, per-period branch trends or per-category missing fields | Gap | P2 | Implemented |

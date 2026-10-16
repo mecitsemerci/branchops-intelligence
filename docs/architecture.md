@@ -57,9 +57,10 @@ Rules enforced by convention and review:
 * `domain/`, `scoring/` and `templates/` import nothing from LangGraph, FastAPI, SQLAlchemy or OpenAI.
 * Agents depend on the `ModelProvider` protocol (`application/interfaces/model_provider.py`), never on a
   concrete client.
-* The LLM never receives tools. All data access (similar-issue retrieval, history) is performed by Python
-  code; the model only classifies, extracts, judges and writes text, and every output is validated by
-  Pydantic and by deterministic post-checks.
+* The LLM receives tools only in the optional `investigate` step: allow-listed, read-only, typed tools
+  behind the `InvestigationReader` port, with a bounded budget. All other data access (similar-issue
+  retrieval, history) is performed by Python code; the model only classifies, extracts, judges and writes
+  text, and every output is validated by Pydantic and by deterministic post-checks.
 
 ## End-to-end flow (vertical slice)
 

@@ -45,7 +45,7 @@ flowchart LR
 | Authenticated webhook ingestion (HMAC `X-Hub-Signature`, header token, rotation, size limit, CIDR allow-list) | `api/routes/webhooks.py`, `infrastructure/security/webhook_auth.py` |
 | Durable PostgreSQL inbox: idempotency, leases, retries with backoff, dead-letter, crash recovery | `infrastructure/persistence/inbox_repository.py`, `workers/` |
 | Out-of-order / partial payload handling (per-attribute version vector, tombstones) | `domain/services/snapshot_merge.py` |
-| Classification, extraction, quality assessment, similarity verification, recommendations, reporting agents | `agents/` |
+| Classification, extraction, quality assessment, similarity verification, recommendations, reporting agents; optional investigation agent with allow-listed read-only tools | `agents/` |
 | Bounded LangGraph workflow with Postgres checkpoints, partial results and manual-review status | `workflows/issue_analysis.py` |
 | Versioned, immutable JSON templates with conditions and rubrics (7 defaults) | `templates/`, `src/branchops/templates/` |
 | Deterministic completeness & quality scoring with versioned policy | `scoring/` |
@@ -203,11 +203,17 @@ endpoint is needed. The PostgreSQL suite drops and recreates the
   (`ticketing.sink: jira`) that opens tickets for incidents reported through MCP. An issue first seen through a partial update without summary/description
   is stored but not analysed until a fuller payload arrives.
 * **Model capabilities are configured, not guessed.** The default assumes JSON-object mode only;
-  enable `structured_outputs` (JSON schema) after `branchops llm probe` confirms it. Tool calling is never
-  used.
+  enable `structured_outputs` (JSON schema) after `branchops llm probe` confirms it.
+* **Tool calling is confined to the optional `investigate` step** (`agents/investigation.py`). There the
+  model may call five allow-listed, read-only tools (`search_history`, `get_issue_summary`,
+  `issue_metadata`, `compare_error_signatures`, `known_resolutions`) within a bounded budget (tool calls,
+  turns, seconds, tokens), and only when related history exists. The tool choice is a schema enum in
+  the structured output, so no native function-calling support is needed (`capabilities.tool_calling`
+  stays `false`). All other agents are structured-output only by design: they receive data, never tools.
 * **Similarity uses PostgreSQL full-text search** (`turkish` configuration) plus deterministic error
-  signatures. pgvector / embedding retrieval is not implemented (the optional internal embedding model
-  was not specified); the `HistoricalIssueReader` port is where it would plug in.
+  signatures and a Turkish domain lexicon. Embedding retrieval is optional and off by default
+  (`workflow.similarity.embeddings`, an approved internal embedding endpoint, vectors in PostgreSQL
+  `REAL[]`, no pgvector); without it, retrieval falls back to full-text search.
 * **The mock provider is a development aid**, not a model: its classifications are keyword-based.
   Quality of real analyses depends on the internal model and must be evaluated with
   `docs/evaluation.md` before go-live.
@@ -217,8 +223,10 @@ endpoint is needed. The PostgreSQL suite drops and recreates the
   LDAP/Kerberos integration is not implemented.
 * **Recurrence** requires an error code in the error details (signature = application + first code);
   incidents without codes are linked only through verified similarity relationships.
-* An analysis persisted as `PARTIAL` after the model was unavailable on the last attempt is not retried
-  automatically (its input hash is recorded); use manual re-analysis once the model is back.
+* An analysis made while the model was unavailable is stored as provisional (`DEGRADED` steps) and
+  re-analysed automatically by the recovery scheduler once the model is healthy again
+  ([model integration](docs/model-integration.md#model-outages-and-recovery)). Analyses that are
+  `PARTIAL` for other reasons (invalid output after repair) are not retried; use manual re-analysis.
 * The dashboard keeps UI state per process; run one replica or rely on Route session affinity.
 * Turkish is the primary data language; prompts are English with explicit instructions to keep
   values in the original language.

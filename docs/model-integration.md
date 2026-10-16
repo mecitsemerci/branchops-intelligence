@@ -39,7 +39,7 @@ llm:
   ca_bundle: /etc/pki/bank/ca-bundle.crt
   capability_detection: explicit     # explicit | probe
   capabilities:
-    tool_calling: false              # never used by BranchOps
+    tool_calling: false              # native function calling is not used (investigate picks tools via JSON schema)
     structured_outputs: false        # response_format json_schema
     json_mode: true                  # response_format json_object
     reasoning_parameters: false      # send reasoning_effort only if true AND llm.reasoning_effort set

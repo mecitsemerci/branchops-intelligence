@@ -1,9 +1,11 @@
 # Agents and workflow
 
 BranchOps uses **logical agents**: each is a prompt + an output schema + deterministic post-processing,
-orchestrated by a fixed LangGraph pipeline. No agent has tools, memory, database access or the ability to
-change control flow. The model is used for language understanding only; every decision that affects a
-number or an action is made by Python.
+orchestrated by a fixed LangGraph pipeline. No agent has database access or the ability to change control
+flow. Only the optional `investigate` step gives the model tools: allow-listed, read-only, bounded
+(see [Adaptive investigation](#adaptive-investigation-agentsinvestigationpy-optional)); every other agent
+is structured-output only. The model is used for language understanding only; every decision that affects
+a number or an action is made by Python.
 
 ## Workflow
 

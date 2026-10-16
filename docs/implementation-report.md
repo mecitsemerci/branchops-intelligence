@@ -78,8 +78,12 @@ new schema.
 
 ## 4. Blocked by missing infrastructure
 
-* **CI pipeline (OPS-4).** The repository has no CI system configured and the target (GitLab, Jenkins, Tekton)
-  is not specified. `make check` is the gate to run in whatever pipeline the bank uses.
+* **Bank-internal pipeline (OPS-4).** A GitHub Actions workflow now exists
+  ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)): ruff, `mypy --strict`, the unit and
+  PostgreSQL integration suites on Python 3.12 and 3.13, and `kubectl kustomize` rendering of the
+  OpenShift manifests, all with the mock provider. The bank's own build and deployment pipeline (GitLab,
+  Jenkins or Tekton, with the offline wheelhouse and internal registry) is still a deployment concern and
+  is not specified; `make check` is the gate to run there.
 * **Model accuracy for GLM-5.3-Flash and alternatives.** Needs the internal gateway; run
   `branchops eval run --provider live --record …` inside the bank network.
 * **Embedding retrieval quality.** Needs an approved internal embedding endpoint.
