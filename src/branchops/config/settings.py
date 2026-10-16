@@ -279,6 +279,30 @@ class RetentionSettings(BaseModel):
     inbox_dead_letter_days: int = Field(default=90, ge=1)
 
 
+class AnalyticsSettings(BaseModel):
+    # Source statuses (case-insensitive, substring) that mean "resolved/closed" for reopen and
+    # recurrence-after-resolution analytics. Adjust to the bank's Jira/ServiceNow workflows.
+    resolved_statuses: list[str] = Field(
+        default_factory=lambda: [
+            "çözüldü",
+            "kapatıldı",
+            "kapalı",
+            "tamamlandı",
+            "resolved",
+            "closed",
+            "done",
+            "cancelled",
+            "iptal",
+        ]
+    )
+
+    def is_resolved(self, status: str | None) -> bool:
+        if not status:
+            return False
+        value = status.casefold()
+        return any(name.casefold() in value for name in self.resolved_statuses)
+
+
 class RecoverySettings(BaseModel):
     """Automatic re-analysis of incidents whose analysis degraded because the model was unavailable."""
 
@@ -511,6 +535,7 @@ class Settings(BaseModel):
     llm: LLMSettings = LLMSettings()
     workflow: WorkflowSettings = WorkflowSettings()
     recovery: RecoverySettings = RecoverySettings()
+    analytics: AnalyticsSettings = AnalyticsSettings()
     templates: TemplateSettings = TemplateSettings()
     scoring: ScoringPolicy = ScoringPolicy()
     security: SecuritySettings = SecuritySettings()

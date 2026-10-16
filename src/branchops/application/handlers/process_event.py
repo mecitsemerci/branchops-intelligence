@@ -169,6 +169,17 @@ class EventProcessor:
                 # Persist any mutation (incl. tombstones and version bumps), not only content changes.
                 if current is None or snapshot.model_dump(mode="json") != current.model_dump(mode="json"):
                     self._issues.save_snapshot(session, snapshot)
+                    previous_status = current.status if current is not None else None
+                    if snapshot.status != previous_status and snapshot.status is not None:
+                        # The merge only accepts newer status values, so this is a real transition.
+                        self._issues.record_status_change(
+                            session,
+                            incident_key,
+                            from_status=previous_status,
+                            to_status=snapshot.status,
+                            changed_at=event.source_updated_at or event.event_timestamp or datetime.now(UTC),
+                            is_resolved=self._settings.analytics.is_resolved,
+                        )
                 if event_type is IncidentEventType.RECORD_DELETED:
                     return self._apply_deletion(session, item, incident_key)
                 if merged.ignored_stale and not merged.applied:

@@ -41,6 +41,9 @@ flowchart LR
 | In-app incident reporting via MCP: app context, screenshots (re-encoded, blurred, never sent to the LLM), draft check, Jira ticket outbox | `mcp/reporting.py`, `application/commands/`, [docs](docs/embedded-agent-guide.md) |
 | Screen ownership registry managed in the dashboard (`/yonetim`), deterministic owner routing, e-mail / Zoom notifications through an outbox (branch operations always CC) | `domain/entities/ownership.py`, `application/commands/routing.py`, [docs](docs/ownership-and-routing.md) |
 | MCP server (read-mostly: queries plus in-app incident reporting and re-analysis requests) for other teams (Claude, Cursor, chatbots): team-scoped tools, resources, prompts; audited | `mcp/`, [docs](docs/mcp-server.md) |
+| Offline evaluation of models, templates and scoring (record/replay, multi-model comparison, score calibration against expert labels) | `evaluation/`, [docs](docs/evaluation.md) |
+| Model outage recovery (provisional analyses, bounded idempotent re-analysis when the model returns) | `workers/recovery.py`, [docs](docs/model-integration.md#model-outages-and-recovery) |
+| Operational analytics: application/branch/category trends, missing fields per category, quality after updates, reopen and recurrence after resolution (UNKNOWN when the source gives no status history) | `application/queries/operations.py`, [docs](docs/operational-analytics.md) |
 | OpenTelemetry metrics (Prometheus) and traces (internal OTLP only) | `infrastructure/observability/` |
 | OpenShift manifests: non-root, read-only FS, probes, NetworkPolicies, HPA, oauth2-proxy SSO | `deploy/openshift/` |
 
@@ -127,6 +130,9 @@ make check       # ruff + mypy --strict + all tests (unit + PostgreSQL integrati
 | `branchops llm health\|probe` | Model gateway health / capability detection |
 | `branchops replay <event-id>` | Requeue a dead-lettered inbox event |
 | `branchops simulate [--once] [--burst N]` | Development/demo only: posts random synthetic incidents to the API (used by the compose `simulator` service; `--once` sends the burst and exits) |
+| `branchops eval run\|compare\|calibrate` | Offline evaluation over a labelled dataset (`--provider mock\|replay\|live`, `--record` for reproducible replays); see [evaluation](docs/evaluation.md) |
+| `branchops recover [--incident KEY]` | One recovery tick: re-analyse incidents degraded by a model outage (the worker does this every minute) |
+| `branchops inbox purge` | Apply `retention.inbox_days` / `inbox_dead_letter_days` now |
 | `branchops report --days 30` | Model-written operational summary (numbers grounded in SQL metrics) |
 
 ## Tests
@@ -155,7 +161,10 @@ CI uses the mock provider; no model endpoint is needed. The PostgreSQL suite dro
 * [Embedded agent guide](docs/embedded-agent-guide.md) — reporting from inside a bank application with app context and screenshots
 * [Security](docs/security.md) — controls and threat model
 * [OpenShift deployment](docs/openshift-deployment.md) — offline build and deployment
-* [Evaluation](docs/evaluation.md) — test strategy, synthetic data, model evaluation
+* [Evaluation](docs/evaluation.md) — test strategy, evaluation framework, score calibration
+* [Operational analytics](docs/operational-analytics.md) — trends, reopen and recurrence, data coverage
+* [Architecture gap analysis](docs/architecture-gap-analysis.md) — audit findings and their status
+* [Implementation report](docs/implementation-report.md) — what was implemented, tested, and what remains
 
 ## Assumptions and limitations
 

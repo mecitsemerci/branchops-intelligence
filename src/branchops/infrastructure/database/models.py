@@ -97,6 +97,8 @@ class Issue(Base):
     latest_completeness: Mapped[float | None] = mapped_column(Float)
     latest_quality: Mapped[float | None] = mapped_column(Float)
     latest_status: Mapped[str | None] = mapped_column(String(20))
+    # Set when the source status moves into a resolved/closed state; cleared on reopen (status history).
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     search_vector: Mapped[Any] = mapped_column(
         TSVECTOR,
         Computed(
@@ -536,3 +538,24 @@ class IssueEmbedding(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (Index("ix_issue_embeddings_model_updated", "model", "updated_at"),)
+
+
+class IssueStatusEvent(Base):
+    """Source status transitions as delivered (e.g. Jira "Açık" → "Çözüldü"), in source time.
+
+    Only transitions accepted by the snapshot merge are recorded, so an out-of-order (older) event never
+    produces a transition. ``resolved`` classifies the new status with ``analytics.resolved_statuses``.
+    """
+
+    __tablename__ = "issue_status_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    incident_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(80))
+    to_status: Mapped[str | None] = mapped_column(String(80))
+    from_resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_issue_status_events_incident", "incident_key", "changed_at"),)

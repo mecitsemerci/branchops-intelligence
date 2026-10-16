@@ -195,6 +195,10 @@ workflow:
     max_seconds: 90
     max_tokens: 12000
 
+# Source statuses that count as resolved (case-insensitive substrings) for reopen / recurrence analytics.
+analytics:
+  resolved_statuses: [çözüldü, kapatıldı, kapalı, tamamlandı, resolved, closed, done, cancelled, iptal]
+
 # Re-analysis of incidents whose analysis degraded because the model was unavailable (docs/model-integration.md).
 recovery:
   enabled: true

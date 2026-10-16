@@ -11,6 +11,7 @@ from branchops.application.queries.executions import execution_steps, executions
 from branchops.application.queries.filters import IssueFilter, Page, SortField
 from branchops.application.queries.issues import issue_detail, list_issues
 from branchops.application.queries.live import live_activity
+from branchops.application.queries.operations import operational_intelligence
 from branchops.application.queries.overview import Overview, overview
 from branchops.application.queries.scope import UNRESTRICTED, QueryScope, ScopeGrant
 from branchops.application.queries.similarity import similar_incidents, similar_to_text
@@ -50,6 +51,11 @@ class ReadModels:
         self, s: Session, days: int = 90, *, scope: QueryScope = UNRESTRICTED
     ) -> dict[str, Any]:
         return quality_analytics(s, days=days, low_quality_threshold=self.low_quality_threshold, scope=scope)
+
+    def operational_intelligence(
+        self, s: Session, days: int = 90, *, scope: QueryScope = UNRESTRICTED
+    ) -> dict[str, Any]:
+        return operational_intelligence(s, days=days, scope=scope)
 
     def recurring_errors(
         self,

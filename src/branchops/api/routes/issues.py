@@ -174,6 +174,18 @@ def quality(
     return svc.read_models.quality_analytics(session, days)
 
 
+@router.get("/analytics/operations")
+def operations(
+    days: int = Query(default=90, ge=7, le=730),
+    svc: AppServices = Depends(services),
+    session: Session = Depends(db_session),
+    _: Principal = Depends(require(Role.VIEWER)),
+) -> dict[str, Any]:
+    """Trends by application/branch/category, missing fields per category, quality after updates, reopen
+    and recurrence after resolution (``UNKNOWN`` where the sources provide no status history)."""
+    return svc.read_models.operational_intelligence(session, days)
+
+
 @router.get("/reports/summary")
 def report_summary(
     request: Request,

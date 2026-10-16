@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from branchops.infrastructure.database.models import (
     IssueComment,
     IssueEmbedding,
     IssueRelationship,
+    IssueStatusEvent,
 )
 from branchops.infrastructure.database.session import Database
 
@@ -126,6 +128,7 @@ class IssueRepository:
         session.execute(delete(Analysis).where(Analysis.incident_key == incident_key))
         session.execute(delete(IssueComment).where(IssueComment.incident_key == incident_key))
         session.execute(delete(IssueEmbedding).where(IssueEmbedding.incident_key == incident_key))
+        session.execute(delete(IssueStatusEvent).where(IssueStatusEvent.incident_key == incident_key))
         session.execute(
             delete(IssueRelationship).where(
                 (IssueRelationship.source_incident_key == incident_key)
@@ -154,6 +157,34 @@ class IssueRepository:
                 latest_quality=None,
                 latest_status=None,
             )
+        )
+
+    def record_status_change(
+        self,
+        session: Session,
+        incident_key: str,
+        *,
+        from_status: str | None,
+        to_status: str | None,
+        changed_at: datetime,
+        is_resolved: Callable[[str | None], bool],
+    ) -> None:
+        """Append a source status transition and keep ``issues.resolved_at`` in step with it."""
+        resolved = is_resolved(to_status)
+        session.add(
+            IssueStatusEvent(
+                incident_key=incident_key,
+                from_status=from_status,
+                to_status=to_status,
+                from_resolved=is_resolved(from_status),
+                resolved=resolved,
+                changed_at=changed_at,
+            )
+        )
+        session.execute(
+            update(Issue)
+            .where(Issue.incident_key == incident_key)
+            .values(resolved_at=changed_at if resolved else None)
         )
 
     def latest_input_hash(self, session: Session, incident_key: str) -> str | None:
