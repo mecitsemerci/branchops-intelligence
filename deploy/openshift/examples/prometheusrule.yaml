@@ -1,0 +1,57 @@
+# Example alerts for the OpenShift user-workload monitoring stack. Not part of the kustomization: review the
+# thresholds with operations, then add this file to an overlay (requires the monitoring.coreos.com CRDs).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: branchops-alerts
+  labels: {app.kubernetes.io/part-of: branchops-intelligence}
+spec:
+  groups:
+    - name: branchops.ingestion
+      rules:
+        - alert: BranchOpsDeadLetters
+          expr: max(branchops_inbox_depth{status="DEAD_LETTER"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Inbox events are dead-lettered; inspect and replay them from the dashboard.
+        - alert: BranchOpsInboxBacklog
+          expr: max(branchops_inbox_oldest_pending_seconds) > 900
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: The oldest pending inbox event is older than 15 minutes (workers saturated or stopped).
+        - alert: BranchOpsWebhookAuthFailures
+          expr: sum(rate(branchops_webhook_requests_total{outcome="unauthorized"}[10m])) > 0.1
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Rejected webhook requests (rotated secret not propagated, or probing).
+    - name: branchops.model
+      rules:
+        - alert: BranchOpsModelDown
+          expr: min(branchops_model_up) == 0
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            summary: The internal LLM gateway fails health probes. Ingestion continues; analyses are
+              provisional and will be recovered automatically.
+        - alert: BranchOpsRecoveryBacklog
+          expr: max(branchops_recovery_oldest_pending_seconds) > 3 * 3600
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: Degraded analyses have waited more than 3 hours for recovery.
+        - alert: BranchOpsRecoveryExhausted
+          expr: increase(branchops_recovery_events_total{event="exhausted"}[1h]) > 0
+          labels: {severity: warning}
+          annotations:
+            summary: Some analyses reached the recovery retry limit (FAILED_PERMANENT); re-analyse manually.
+        - alert: BranchOpsStructuredOutputFailures
+          expr: >
+            sum(rate(branchops_structured_output_failures_total[30m]))
+            / clamp_min(sum(rate(branchops_agent_duration_milliseconds_count{status!="SKIPPED"}[30m])), 1) > 0.1
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: More than 10 % of model outputs fail schema validation (model or prompt change?).
