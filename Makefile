@@ -76,6 +76,11 @@ check: lint typecheck test ## Lint, type check and full test suite
 test-llm: ## Smoke tests against a real endpoint (needs BRANCHOPS_CONFIG, LLM_* env)
 	BRANCHOPS_LLM_INTEGRATION=1 $(BIN)/pytest -m llm_integration tests/integration/test_llm_endpoint.py -q
 
+.PHONY: eval
+eval: ## Offline evaluation over the synthetic Turkish dataset (mock provider, no endpoint)
+	BRANCHOPS_CONFIG=config/local.yaml $(BIN)/branchops eval run \
+	  --dataset samples/evaluation/turkish-branch-incidents.json --out eval-results --label mock
+
 ##@ Docker / docker compose
 .PHONY: docker-build
 docker-build: ## Build the application image ($(IMAGE)) for local use

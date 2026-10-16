@@ -52,6 +52,59 @@ def routing_section(data: dict[str, Any]) -> None:
                 )
 
 
+def operations_section(data: dict[str, Any]) -> None:
+    """Trends and reopen/recurrence; UNKNOWN shown as such (never as 0); counts are not business impact."""
+    with ui.card().classes("w-full"):
+        ui.label("Operasyonel eğilimler").classes("text-lg font-semibold")
+        ui.label(data["note"]).classes("text-xs text-slate-500")
+        rr = data["reopen_and_recurrence"]
+        cov = rr["coverage"]
+        with ui.row().classes("gap-4 flex-wrap"):
+            kpi("Durum geçmişi olan kayıt", cov["records_with_status_history"])
+            kpi("Çözülen kayıt", cov["records_resolved"])
+            reopened = rr["reopened_records"]
+            kpi("Yeniden açılan", reopened if reopened != "UNKNOWN" else "Bilinmiyor")
+            after = data["quality_after_updates"]
+            kpi("Güncelleme sonrası iyileşen", after["improved"])
+            kpi("Ort. kalite farkı", after["mean_delta"])
+        if rr.get("note"):
+            ui.label(rr["note"]).classes("text-orange-700 text-sm")
+        if isinstance(rr["recurrence_after_resolution"], list) and rr["recurrence_after_resolution"]:
+            ui.label("Çözüm sonrası tekrar eden hata imzaları").classes("font-semibold")
+            _table(
+                rr["recurrence_after_resolution"],
+                [
+                    ("error_signature", "Hata imzası"),
+                    ("new_records_within_window", "Yeni kayıt"),
+                    ("first_resolved", "İlk çözüm"),
+                ],
+                "error_signature",
+            )
+        ui.label("Uygulamaya göre haftalık kayıt").classes("font-semibold")
+        _table(
+            [{**r, "id": f"{r['application']}/{r['week']}"} for r in data["application_trend"]],
+            [
+                ("application", "Uygulama"),
+                ("week", "Hafta"),
+                ("issues", "Kayıt"),
+                ("avg_quality", "Ort. kalite"),
+            ],
+            "id",
+        )
+        ui.label("Kategoriye göre en sık eksik / belirlenemeyen alanlar").classes("font-semibold")
+        rows = [
+            {
+                "category": c["category"],
+                "fields": ", ".join(
+                    f"{FIELD_LABELS_TR.get(f['field'], f['field'])} ({f['missing']} eksik, {f['unknown']} bilinmiyor)"
+                    for f in c["fields"]
+                ),
+            }
+            for c in data["missing_by_category"]
+        ]
+        _table(rows, [("category", "Kategori"), ("fields", "Alanlar")], "category")
+
+
 def register(ctx: DashboardContext) -> None:
     @ui.page("/analytics")
     async def analytics_page(request: Request) -> None:
@@ -68,9 +121,11 @@ def register(ctx: DashboardContext) -> None:
                 d = int(days.value)
                 data = await load(lambda: ctx.query(lambda s: ctx.read.quality_analytics(s, d)))
                 routing = await load(lambda: ctx.query(lambda s: routing_analytics(s, days=d)))
+                ops = await load(lambda: ctx.query(lambda s: ctx.read.operational_intelligence(s, d)))
                 body.clear()
                 with body:
                     routing_section(routing)
+                    operations_section(ops)
                     with ui.row().classes("w-full gap-4 flex-nowrap"):
                         with ui.card().classes("w-1/2"):
                             ui.label("Kategoriye göre ortalama kalite").classes("font-semibold")

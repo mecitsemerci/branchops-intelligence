@@ -222,3 +222,4 @@ __marimo__/
 # BranchOps
 .nicegui/
 wheelhouse/
+eval-results/

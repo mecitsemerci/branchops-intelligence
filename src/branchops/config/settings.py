@@ -17,7 +17,7 @@ import yaml
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from branchops.domain.enums import Role
-from branchops.scoring.policies import ScoringPolicy
+from branchops.scoring.policies import ScoringPolicy, registry_conflicts
 
 # Development fallback: stable within one process only (production requires the configured key).
 _PROCESS_PSEUDONYM_KEY = os.urandom(32)
@@ -53,6 +53,10 @@ class WebhookSettings(BaseModel):
     query_token_secrets_env: str = "JIRA_WEBHOOK_QUERY_TOKENS"
     max_body_bytes: int = 1_048_576
     allowed_source_cidrs: list[str] = Field(default_factory=list)
+    # Push events whose own (signed) timestamp is older than this are acknowledged and ignored. It must stay
+    # below ``retention.inbox_days``: an accepted event's idempotency key then always outlives its
+    # replay window, so a captured delivery cannot be re-submitted after its inbox row was purged.
+    max_event_age_days: int = Field(default=7, ge=1)
 
 
 class JiraSettings(BaseModel):
@@ -269,6 +273,52 @@ class RetentionSettings(BaseModel):
     redact_inbox_payload_after_processing: bool = True
     # Attachments (and unbound draft uploads) older than this are purged by the worker / CLI.
     attachments_days: int = Field(default=180, ge=1)
+    # Finished inbox events (raw source payloads, masked after processing) and their LangGraph checkpoints.
+    # Dead letters are kept longer so that they can still be inspected and replayed.
+    inbox_days: int = Field(default=30, ge=1)
+    inbox_dead_letter_days: int = Field(default=90, ge=1)
+
+
+class AnalyticsSettings(BaseModel):
+    # Source statuses (case-insensitive, substring) that mean "resolved/closed" for reopen and
+    # recurrence-after-resolution analytics. Adjust to the bank's Jira/ServiceNow workflows.
+    resolved_statuses: list[str] = Field(
+        default_factory=lambda: [
+            "çözüldü",
+            "kapatıldı",
+            "kapalı",
+            "tamamlandı",
+            "resolved",
+            "closed",
+            "done",
+            "cancelled",
+            "iptal",
+        ]
+    )
+
+    def is_resolved(self, status: str | None) -> bool:
+        if not status:
+            return False
+        value = status.casefold()
+        return any(name.casefold() in value for name in self.resolved_statuses)
+
+
+class RecoverySettings(BaseModel):
+    """Automatic re-analysis of incidents whose analysis degraded because the model was unavailable."""
+
+    enabled: bool = True
+    # How often the worker checks for due recoveries (each replica; rows are claimed with SKIP LOCKED).
+    interval_seconds: float = Field(default=60.0, ge=5)
+    # First retry after the degraded analysis, then doubling up to the maximum (with jitter).
+    base_delay_seconds: float = Field(default=300.0, ge=1)
+    max_delay_seconds: float = Field(default=6 * 3600.0, ge=1)
+    max_attempts: int = Field(default=6, ge=1, le=50)
+    # Recoveries enqueued per tick and replica: a returning model is not flooded (no retry storm).
+    batch_size: int = Field(default=10, ge=1, le=500)
+    # Enqueue only after a successful model health probe.
+    require_model_health: bool = True
+    # RUNNING analysis rows without a heartbeat for this long are closed as FAILED (crashed worker).
+    stale_running_minutes: int = Field(default=60, ge=5)
 
 
 class WorkerSettings(BaseModel):
@@ -313,6 +363,29 @@ class LLMSettings(BaseModel):
         return SecretStr(value) if value else None
 
 
+class EmbeddingSettings(BaseModel):
+    """Optional semantic retrieval with an *approved internal embedding model* (OpenAI-compatible
+    ``/embeddings``). Off by default; the generative model (e.g. GLM-5.3-Flash) must not be used here and
+    nothing is downloaded. When the endpoint is unavailable, retrieval falls back to full-text search.
+    """
+
+    enabled: bool = False
+    base_url: str | None = None
+    model: str | None = None
+    api_key_env: str = "EMBEDDING_API_KEY"
+    ca_bundle: str | None = None
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    # Most recent embedded incidents compared per analysis (cosine in Python; no pgvector required).
+    candidate_pool: int = Field(default=2000, ge=10, le=20_000)
+    top_k: int = Field(default=10, ge=1, le=50)
+    min_score: float = Field(default=0.75, ge=0, le=1)
+    max_input_chars: int = Field(default=2000, ge=100)
+
+    def api_key(self) -> SecretStr | None:
+        value = os.environ.get(self.api_key_env)
+        return SecretStr(value) if value else None
+
+
 class SimilaritySettings(BaseModel):
     candidate_limit: int = 20
     lookback_days: int = 180
@@ -321,6 +394,21 @@ class SimilaritySettings(BaseModel):
     duplicate_window_hours: int = 72
     recurring_window_days: int = 30
     recurring_threshold: int = 3
+    embeddings: EmbeddingSettings = EmbeddingSettings()
+
+
+class InvestigationSettings(BaseModel):
+    """Optional bounded historical investigation after the similarity step (off by default).
+
+    It runs only when the similarity step found a related/duplicate/possible-common-cause incident or a
+    recurring error signature; the model can only call allow-listed read-only tools.
+    """
+
+    enabled: bool = False
+    max_tool_calls: int = Field(default=4, ge=1, le=10)
+    max_depth: int = Field(default=3, ge=1, le=6)  # model turns that may call a tool
+    max_seconds: float = Field(default=90.0, ge=5)
+    max_tokens: int = Field(default=12_000, ge=1000)
 
 
 class WorkflowSettings(BaseModel):
@@ -330,6 +418,7 @@ class WorkflowSettings(BaseModel):
     max_input_chars: int = 24_000
     prompt_version: str = "2026.10-3"
     similarity: SimilaritySettings = SimilaritySettings()
+    investigation: InvestigationSettings = InvestigationSettings()
 
 
 class TemplateSettings(BaseModel):
@@ -445,6 +534,8 @@ class Settings(BaseModel):
     worker: WorkerSettings = WorkerSettings()
     llm: LLMSettings = LLMSettings()
     workflow: WorkflowSettings = WorkflowSettings()
+    recovery: RecoverySettings = RecoverySettings()
+    analytics: AnalyticsSettings = AnalyticsSettings()
     templates: TemplateSettings = TemplateSettings()
     scoring: ScoringPolicy = ScoringPolicy()
     security: SecuritySettings = SecuritySettings()
@@ -480,6 +571,38 @@ class Settings(BaseModel):
         for src in self.sources:
             if src.is_push and src.auth is None:
                 src.auth = SourceAuthSettings()
+        return self
+
+    @model_validator(mode="after")
+    def _embedding_model(self) -> Settings:
+        emb = self.workflow.similarity.embeddings
+        if emb.enabled:
+            if not (emb.base_url and emb.model):
+                raise ValueError("similarity.embeddings: base_url and model are required when enabled")
+            if emb.model == self.llm.model:
+                raise ValueError(
+                    "similarity.embeddings.model must be an approved embedding model, not the generative "
+                    f"model {self.llm.model!r}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _replay_window(self) -> Settings:
+        if self.webhook.max_event_age_days >= self.retention.inbox_days:
+            raise ValueError(
+                "webhook.max_event_age_days must be lower than retention.inbox_days "
+                "(otherwise purged idempotency keys reopen a replay window)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _released_scoring_policy(self) -> Settings:
+        conflicts = registry_conflicts(self.scoring)
+        if conflicts:
+            raise ValueError(
+                f"scoring: version {self.scoring.version} is a released policy; changing {conflicts} "
+                "requires a new scoring.version"
+            )
         return self
 
     @model_validator(mode="after")

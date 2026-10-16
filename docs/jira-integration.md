@@ -17,6 +17,21 @@ still accept the bare issue key.
 | Secret (Jira DC 10+ / Cloud) | a value from `JIRA_WEBHOOK_SECRETS` → Jira sends `X-Hub-Signature: sha256=<hmac>` |
 | Older Jira without secrets | send header `X-BranchOps-Webhook-Token` via a reverse proxy, or (last resort) enable `auth.allow_query_token` on the source and register `…/jira?token=<value from JIRA_WEBHOOK_QUERY_TOKENS>` |
 
+**Jira version compatibility.** Jira Data Center does not offer every authentication option that Jira
+Cloud does. Choose the mode by version, not by assumption:
+
+| Jira | Webhook secret | Custom request headers | BranchOps `auth.mode` |
+|---|---|---|---|
+| Cloud | yes (`X-Hub-Signature: sha256=…`) | no | `hmac` |
+| Data Center ≥ 10.0 | yes (same header) | no | `hmac` |
+| Data Center / Server 8.x–9.x | no | no | `token`, with an internal reverse proxy adding `X-BranchOps-Webhook-Token`; last resort: `allow_query_token` plus `allowed_source_cidrs` |
+
+* The query token appears in the access logs of every proxy on the path. Prefer the reverse-proxy header,
+  and rotate query tokens (`JIRA_WEBHOOK_QUERY_TOKENS` accepts several values).
+* There is deliberately no IP-only mode: a source address is not authentication.
+* HMAC is verified over the raw request bytes before parsing. Jira's scheme has no timestamp, so replay is
+  handled by idempotency (below).
+
 Configure the source under `sources:` (`id: jira`, `type: jira_webhook`); configurations that still use the
 old `jira:` / `webhook:` sections are translated into exactly that source. Map the bank's custom fields
 in `field_mapping`, for example
@@ -40,9 +55,31 @@ sequenceDiagram
     A-->>J: 202 accepted · 200 duplicate · 200 ignored (unsupported event / project not in allowed_groups)
 ```
 
-No model call or issue processing happens in the request. `idempotency_key` is
-`jira:delivery:<X-Atlassian-Webhook-Identifier>` when Jira sends it, otherwise
-`jira:sha256:<canonical payload>`, so Jira retries of the same delivery are stored once.
+No model call or issue processing happens in the request. The `idempotency_key` depends on how the request
+was authenticated:
+
+* **Signed request (HMAC):** `jira:sha256:<canonical payload>`. The digest is taken over the signed body only.
+  The `X-Atlassian-Webhook-Identifier` header is not covered by the signature, so it must not decide
+  idempotency: a captured delivery re-sent with a different identifier is still a duplicate. Jira's own
+  retries carry the same body and are stored once.
+* **Token request:** `jira:delivery:<X-Atlassian-Webhook-Identifier>` when present, otherwise the payload
+  digest.
+
+**Replay window.** An event is acknowledged with `200 ignored` and not stored when either holds:
+
+* its own time, read from the body only, is older than `webhook.max_event_age_days` (7). For Jira this is the
+  webhook `timestamp`, else `issue.fields.updated`; for ServiceNow it is `sys_updated_on`. The receive time is
+  never used.
+* it asserts no time at all (fail-closed).
+
+For signed requests the timestamp is part of the signed body.
+The setting must stay below `retention.inbox_days` (30), and startup is refused otherwise. This guarantees
+that a delivery is only accepted while its idempotency key is still in the inbox. Without the window, a
+captured delivery could be re-submitted once retention had purged its row.
+
+Rejected requests (401, 400, 413, 415) are never written to the database. They are only counted in
+`branchops_webhook_requests_total{outcome=…}` and logged without the body. A non-object `changelog`,
+deeply nested JSON and `\u0000` produce 400 or are ignored, never a server error.
 
 ## Payload variants handled (`infrastructure/sources/jira/adapter.py`)
 
@@ -77,9 +114,20 @@ No model call or issue processing happens in the request. `idempotency_key` is
   prompt version + model) prevents duplicate analyses for no-op updates or redeliveries.
 * Failures: transient errors are retried with exponential backoff + jitter
   (`worker.backoff_base_seconds` … `backoff_max_seconds`) up to `worker.max_attempts`; then the event is
-  `DEAD_LETTER` (replay from the dashboard, `POST /api/admin/inbox/{id}/replay` or `branchops replay`).
-  Invalid payloads are dead-lettered immediately. Expired leases (crashed worker) are returned to
-  `PENDING` by the next worker poll.
+  `DEAD_LETTER`.
+  * Replay from the dashboard, `POST /api/admin/inbox/{id}/replay` or `branchops replay`. Replay resets
+    the attempts and clears the outcome; `last_error` is kept for the investigation trail.
+  * Invalid payloads (poison messages) are dead-lettered immediately, without retries.
+  * Stored error text is PII-masked, and database parameter dumps are cut.
+  * Model outages are handled separately and recovered later; see
+    [model recovery](model-integration.md#model-outages-and-recovery).
+* Crash recovery: expired leases (crashed or killed worker) are returned to `PENDING` by the next worker
+  poll. If that was the last attempt, the event becomes `DEAD_LETTER` (with `processed_at` set and the
+  payload redacted).
+* Graceful shutdown: on SIGTERM a worker stops claiming and waits up to `worker.shutdown_grace_seconds` (60)
+  for in-flight events. It then hands unfinished events back to `PENDING` without consuming an attempt, so
+  another replica continues at once instead of after `lease_seconds`. Keep `terminationGracePeriodSeconds`
+  (120 in `worker.yaml`) above the grace period.
 * Correlation: each request gets an `X-Correlation-ID` (accepted from the caller if well-formed) that is
   stored on the inbox row, propagated to logs, traces, LLM request headers and the analysis record.
 
@@ -90,7 +138,12 @@ No model call or issue processing happens in the request. `idempotency_key` is
 | Issue deleted | `retention.on_issue_deleted: soft_delete` (default) | issue hidden from dashboard, API and similarity; relationships removed; analyses kept for audit |
 | | `purge` | content, comments, analyses, steps and relationships deleted; a content-free tombstone row (key + deleted flag) is kept so late events cannot re-create the issue; audit log entry kept |
 | Comment deleted | `retention.redact_deleted_comments: true` (default) | comment body erased, tombstone kept; issue re-analysed without it |
-| Raw payloads | `retention.redact_inbox_payload_after_processing: true` (default) | inbox payload replaced with a PII-masked copy once processed |
+| Raw payloads | `retention.redact_inbox_payload_after_processing: true` (default) | inbox payload replaced with a PII-masked copy once processed, and also when dead-lettered (by the runner or the lease reaper); the JSON structure is kept, so a dead letter can still be replayed |
+| Finished inbox events | `retention.inbox_days: 30` | `COMPLETED`/`SKIPPED` events and their LangGraph checkpoint threads deleted hourly by the worker (`branchops inbox purge` runs it now); a delivery re-sent after that is accepted again and is a no-op for the merge |
+| Dead letters | `retention.inbox_dead_letter_days: 90` | kept longer for inspection and replay, then deleted the same way |
+
+Pending and in-progress events hold the raw payload until processed. This is the window in which the inbox
+holds unmasked data; the worker masks the payload before anything else is derived from it.
 
 All free text is masked (TCKN, IBAN, card numbers, phone numbers, e-mail, configurable extra patterns)
 before it is stored in issue tables or sent to the model.

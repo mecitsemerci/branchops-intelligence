@@ -124,6 +124,15 @@ class AnalysisStatus(StrEnum):
 
 
 class StepStatus(StrEnum):
+    """Outcome of one workflow step.
+
+    SUCCEEDED  The step produced its result.
+    DEGRADED   The model was unavailable (outage, timeout, access refused); a fallback was used and the
+               analysis is eligible for automatic recovery.
+    FAILED     The step failed for a reason a retry will not fix (invalid output, rejected request).
+    SKIPPED    Nothing to do (e.g. no field to assess).
+    """
+
     SUCCEEDED = "SUCCEEDED"
     DEGRADED = "DEGRADED"
     FAILED = "FAILED"
@@ -133,15 +142,18 @@ class StepStatus(StrEnum):
 class RelationshipType(StrEnum):
     """Relationship between two incidents found by the similarity step.
 
-    DUPLICATE_CANDIDATE   Very likely the same incident reported again (same branch, symptom and time;
-                          deterministic duplicate gates passed).
-    RELATED               Similar symptom or component, but a different occurrence or branch.
-    UNRELATED             Superficial word overlap only.
-    UNVERIFIED_CANDIDATE  Full-text candidate that the model did not verify.
+    DUPLICATE_CANDIDATE    Very likely the same incident reported again (same branch, time window and
+                           application or error code; deterministic duplicate gates passed). Never merged.
+    RELATED                Same application or error code, but a different occurrence or branch.
+    POSSIBLE_COMMON_CAUSE  Different application/branch, but close in time and plausibly sharing a cause
+                           (e.g. neighbouring branches losing the network); a hypothesis, not a finding.
+    UNRELATED              Superficial word overlap only.
+    UNVERIFIED_CANDIDATE   Retrieved candidate that was not verified (UNKNOWN relationship).
     """
 
     DUPLICATE_CANDIDATE = "DUPLICATE_CANDIDATE"
     RELATED = "RELATED"
+    POSSIBLE_COMMON_CAUSE = "POSSIBLE_COMMON_CAUSE"
     UNRELATED = "UNRELATED"
     UNVERIFIED_CANDIDATE = "UNVERIFIED_CANDIDATE"
 

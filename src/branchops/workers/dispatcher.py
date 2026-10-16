@@ -8,13 +8,13 @@ import signal
 import socket
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
 from branchops.config.settings import WorkerSettings
 from branchops.infrastructure.database.session import Database
-from branchops.infrastructure.persistence.inbox_repository import InboxRepository
+from branchops.infrastructure.persistence.inbox_repository import InboxItem, InboxRepository
 from branchops.workers.processor import InboxItemRunner
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class Dispatcher:
         self._inbox = InboxRepository()
         self._stop = threading.Event()
         self._pool = ThreadPoolExecutor(max_workers=settings.concurrency, thread_name_prefix="inbox")
-        self._inflight: set[Future[Any]] = set()
+        self._inflight: dict[Future[Any], InboxItem] = {}
         self._lock = threading.Lock()
         self.last_loop_at = time.monotonic()
         self.db_ok = False
@@ -45,11 +45,14 @@ class Dispatcher:
         """One poll iteration; returns the number of items dispatched."""
         self.last_loop_at = time.monotonic()
         with self._db.session() as s:
-            reaped = self._inbox.reap_expired_leases(s)
+            reaped = self._inbox.reap_expired(s)
         if reaped:
-            logger.warning("recovered expired leases", extra={"count": reaped})
+            logger.warning("recovered expired leases", extra={"count": len(reaped)})
+            dead = [event_id for event_id, status in reaped if status == "DEAD_LETTER"]
+            if dead:
+                self._runner.redact_dead_letters(dead)
         with self._lock:
-            self._inflight = {f for f in self._inflight if not f.done()}
+            self._inflight = {f: i for f, i in self._inflight.items() if not f.done()}
             capacity = self._settings.concurrency - len(self._inflight)
         if capacity <= 0:
             return 0
@@ -62,7 +65,7 @@ class Dispatcher:
         for item in items:
             future = self._pool.submit(self._runner.run, item)
             with self._lock:
-                self._inflight.add(future)
+                self._inflight[future] = item
         return len(items)
 
     def run_forever(self) -> None:
@@ -76,8 +79,31 @@ class Dispatcher:
                 dispatched = 0
             if dispatched == 0:
                 self._stop.wait(self._settings.poll_interval_seconds)
-        logger.info("worker stopping; waiting for in-flight events")
-        self._pool.shutdown(wait=True, cancel_futures=False)
+        self.drain(self._settings.shutdown_grace_seconds)
+
+    def drain(self, grace_seconds: float) -> int:
+        """Wait up to ``grace_seconds`` for in-flight events, then hand the unfinished ones back.
+
+        Unfinished events are released to PENDING without consuming an attempt, so another replica can take
+        them over immediately instead of waiting for the lease (``lease_seconds``) to expire. A late result of
+        the abandoned thread is rejected by the lease-owner guard. Returns the number of released events.
+        """
+        with self._lock:
+            pending = dict(self._inflight)
+        logger.info("worker stopping; waiting for in-flight events", extra={"count": len(pending)})
+        _, not_done = wait(list(pending), timeout=max(0.0, grace_seconds))
+        released = 0
+        for future in not_done:
+            item = pending[future]
+            try:
+                self._runner.release(item)
+                released += 1
+            except Exception:
+                logger.exception("could not release event on shutdown", extra={"event_id": str(item.id)})
+        if released:
+            logger.warning("released unfinished events on shutdown", extra={"count": released})
+        self._pool.shutdown(wait=False, cancel_futures=True)
+        return released
 
     def install_signal_handlers(self) -> None:
         def handler(signum: int, _frame: Any) -> None:

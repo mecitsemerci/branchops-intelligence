@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import BYTEA, JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB, REAL, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -64,6 +64,7 @@ class WebhookInbox(Base):
         Index("ix_inbox_claim", "status", "available_at"),
         Index("ix_inbox_source_claim", "source", "status", "available_at"),
         Index("ix_inbox_incident", "source", "issue_key", "received_at"),
+        Index("ix_inbox_finished", "status", "processed_at"),
     )
 
 
@@ -96,6 +97,8 @@ class Issue(Base):
     latest_completeness: Mapped[float | None] = mapped_column(Float)
     latest_quality: Mapped[float | None] = mapped_column(Float)
     latest_status: Mapped[str | None] = mapped_column(String(20))
+    # Set when the source status moves into a resolved/closed state; cleared on reopen (status history).
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     search_vector: Mapped[Any] = mapped_column(
         TSVECTOR,
         Computed(
@@ -157,6 +160,12 @@ class Analysis(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Bounded historical investigation (optional step): tool calls and evidence-checked findings.
+    investigation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # A step degraded because the model was unavailable: provisional result, eligible for recovery.
+    recoverable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     # Live progress (set while the workflow runs; cleared when the analysis is persisted).
     current_step: Mapped[str | None] = mapped_column(String(60))
     worker_id: Mapped[str | None] = mapped_column(String(200))
@@ -484,3 +493,69 @@ class NotificationOutbox(OutboxMixin, Base):
     recipient: Mapped[str] = mapped_column(String(320), nullable=False)
     team_id: Mapped[int | None] = mapped_column(Integer)
     role: Mapped[str] = mapped_column(String(10), nullable=False, default="to")  # to | cc
+
+
+class AnalysisRecovery(Base):
+    """Recovery state machine of an incident whose latest analysis degraded because the model was down.
+
+    ``RECOVERY_PENDING`` → ``RUNNING`` (a recovery inbox event is queued) → ``COMPLETED`` when a
+    non-degraded analysis is stored; a recovery run that degrades again goes to ``RETRY_WAIT`` (exponential
+    backoff) and, after ``max_attempts``, to ``FAILED_PERMANENT``. One row per incident.
+    """
+
+    __tablename__ = "analysis_recovery"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    analysis_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    inbox_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_analysis_recovery_due", "state", "next_attempt_at"),)
+
+
+class IssueEmbedding(Base):
+    """Embedding of an incident's retrieval text, produced by the configured internal embedding model.
+
+    Stored as ``REAL[]`` (no pgvector extension required); compared in Python over a bounded, recent pool.
+    Rows of another model are ignored, so changing ``similarity.embeddings.model`` never mixes vector spaces.
+    """
+
+    __tablename__ = "issue_embeddings"
+
+    incident_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    model: Mapped[str] = mapped_column(String(120), primary_key=True)
+    vector: Mapped[list[float]] = mapped_column(ARRAY(REAL), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_issue_embeddings_model_updated", "model", "updated_at"),)
+
+
+class IssueStatusEvent(Base):
+    """Source status transitions as delivered (e.g. Jira "Açık" → "Çözüldü"), in source time.
+
+    Only transitions accepted by the snapshot merge are recorded, so an out-of-order (older) event never
+    produces a transition. ``resolved`` classifies the new status with ``analytics.resolved_statuses``.
+    """
+
+    __tablename__ = "issue_status_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    incident_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(80))
+    to_status: Mapped[str | None] = mapped_column(String(80))
+    from_resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_issue_status_events_incident", "incident_key", "changed_at"),)

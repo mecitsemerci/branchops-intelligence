@@ -37,10 +37,24 @@ evidence could not be verified against the issue text.
 | present | ABSENT | POOR (a value exists) |
 | present, validation errors | GOOD / ACCEPTABLE | POOR |
 | INSUFFICIENT | GOOD / ACCEPTABLE | POOR |
+| summary / description without any operational anchor (policy ≥ `2026.10-2`) | GOOD / ACCEPTABLE | POOR |
 | present | not returned by the model | ACCEPTABLE (recorded as a deterministic default) |
 | present | other | unchanged |
 
 Every adjustment is stored (`adjusted_from`, `adjustment_reason`).
+
+**Non-specific text.** A summary or description counts as specific when it contains at least one operational
+anchor (`domain/services/specificity.py`). Symptoms on their own ("çalışmıyor", "donuyor", "hata var") are not
+anchors. The anchors are:
+
+* a number (branch code, time, count, version);
+* an error code;
+* a quoted message;
+* a named device, system or business process (`OBJECT_TERMS`).
+
+From policy `2026.10-2`, a model-proposed GOOD/ACCEPTABLE level for such a field is capped at POOR. This
+removes the case where a lenient model gives full credit to "Uygulama çalışmıyor." padded to 12 words (gap
+analysis SCO-1, test `tests/unit/test_calibration.py`). The cap only lowers a level, never raises one.
 
 ## 3. Scores
 
@@ -83,11 +97,45 @@ applicable, required, credits, level, validation errors per field), `missing_fie
 `scoring_policy_version`, `model_id`, `prompt_version`, timestamps. Re-analyses append new rows, giving
 the score history shown in the dashboard and used for "quality improvement" analytics.
 
+**UNKNOWN is not MISSING.**
+
+* MISSING means the record does not contain the information. UNKNOWN means it could not be determined:
+  the topic is mentioned without a usable value, the extraction step failed, or an unverifiable value was
+  downgraded.
+* Both get no completeness or quality credit by default, because neither is usable information. They are
+  still reported apart:
+  * `missing_fields` and `unknown_fields`;
+  * the score result's `missing_required_confirmed` and `unknown_required`;
+  * the analytics "most missing fields", which counts MISSING and UNKNOWN separately;
+  * the `analysis_ready` notification, which shows "Belirlenemeyen zorunlu bilgiler" separately.
+* `missing_required_fields` still lists both, because both need a follow-up. It is kept for API
+  compatibility.
+
 ## 5. Policies
 
-`scoring` section of the configuration (`ScoringPolicy`). **Any change to a number requires a new
-`version`**, otherwise historical scores become unexplainable. `low_quality_threshold` (default 50)
-drives dashboard KPIs and filters.
+The `scoring` section of the configuration (`ScoringPolicy`). `low_quality_threshold` (default 50) drives
+dashboard KPIs and filters.
+
+**Released versions are immutable.** Every released policy is registered verbatim in
+`scoring/policies.py::POLICY_HISTORY`.
+
+| Version | Change |
+|---|---|
+| `2026.10-1` | initial credits |
+| `2026.10-2` | non-specific summary/description capped at POOR; credits unchanged |
+
+* A configuration that names a registered version always scores with exactly that version's parameters.
+  Parameters it omits are filled from the registry, so pinning `version: "2026.10-1"` keeps the old
+  behaviour.
+* Startup is refused when a configuration changes any parameter of a registered version.
+* A changed policy needs a new version string. A bank-specific string such as `bank-2027.01` is accepted
+  as configured.
+* `registered_policy(version)` returns the exact policy behind any stored `scoring_policy_version`, so
+  historical scores stay explainable.
+
+Weights live in the templates, which are versioned and immutable (see [templates](templates.md)). Neither
+weights nor credits have been changed by the calibration work, because a synthetic dataset is not evidence
+for a weight change. See [evaluation](evaluation.md#score-calibration) for how to collect that evidence.
 
 Tests: `tests/unit/test_scoring.py` covers each rule above (N/A exclusion, UNKNOWN policies, conditional
 applicability/requirement, validation caps, null quality, determinism).

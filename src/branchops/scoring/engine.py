@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from branchops.domain.entities.analysis import FieldAssessment, FieldScore, ScoreResult
 from branchops.domain.entities.issue import CanonicalIssue
 from branchops.domain.enums import FieldState, RubricLevel
+from branchops.domain.services.specificity import specificity
 from branchops.scoring.completeness import completeness_credit, weighted_score
 from branchops.scoring.policies import ScoringPolicy
 from branchops.scoring.quality import quality_credit, validated_level
@@ -93,8 +94,13 @@ def score_issue(
         level: RubricLevel | None = None
         if assessments is not None:
             proposal = assessments.get(d.name)
+            cap = (
+                policy.non_specific_level_cap
+                if d.name in policy.specificity_fields and not specificity(resolved.value).specific
+                else None
+            )
             level, reason = validated_level(
-                state, proposal.level if proposal else None, bool(resolved.validation_errors)
+                state, proposal.level if proposal else None, bool(resolved.validation_errors), cap
             )
             if level is not None and level is RubricLevel.POOR and state is FieldState.SUFFICIENT:
                 state = FieldState.INSUFFICIENT
@@ -141,6 +147,10 @@ def score_issue(
             for f in field_scores
             if f.required and f.state in (FieldState.MISSING, FieldState.UNKNOWN)
         ],
+        missing_required_confirmed=[
+            f.field for f in field_scores if f.required and f.state is FieldState.MISSING
+        ],
+        unknown_required=[f.field for f in field_scores if f.required and f.state is FieldState.UNKNOWN],
         template_id=template.template_id,
         template_version=template.version,
         scoring_policy_version=policy.version,

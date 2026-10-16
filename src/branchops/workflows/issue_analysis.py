@@ -1,8 +1,12 @@
 """Bounded LangGraph workflow: normalise → classify → template → extract → assess → score → similarity →
-recommend → persist.
+investigate (optional, only with relevant history) → recommend → persist.
 
-The graph is a fixed linear pipeline (no model-driven routing, no tools, recursion limit enforced). Model
-steps degrade gracefully: non-transient failures produce partial results, transient unavailability
+The graph is a fixed linear pipeline (no model-driven routing, recursion limit enforced). The only step in
+which the model chooses actions is the optional ``investigate`` step: allow-listed read-only tools behind a
+typed port, bounded by tool calls, depth, time and tokens, skipped deterministically when the similarity
+step found no relevant history (``agents/investigation.py``).
+
+Model steps degrade gracefully: non-transient failures produce partial results, transient unavailability
 re-raises so the inbox retries the event later, except on the last attempt (``allow_degraded``) where a
 partial analysis is persisted instead of losing the event.
 """
@@ -23,11 +27,17 @@ from langgraph.types import RetryPolicy
 from branchops.agents.base import StructuredCaller, StructuredOutputError
 from branchops.agents.classification import ClassificationAgent
 from branchops.agents.extraction import ExtractionAgent, ExtractionOutput, build_canonical_issue
+from branchops.agents.investigation import InvestigationAgent, InvestigationBudget
 from branchops.agents.prompts import issue_data_block, issue_sources
 from branchops.agents.quality_assessment import QualityAssessmentAgent
 from branchops.agents.recommendation import RecommendationAgent, deterministic_recommendations
 from branchops.agents.similarity import IssueFingerprint, SimilarityAgent, shortlist
-from branchops.application.interfaces.model_provider import ModelRequestError, ModelUnavailableError
+from branchops.application.interfaces.investigation import InvestigationReader
+from branchops.application.interfaces.model_provider import (
+    ModelProvider,
+    ModelRequestError,
+    ModelUnavailableError,
+)
 from branchops.application.interfaces.repositories import (
     AnalysisSink,
     HistoricalIssueReader,
@@ -40,6 +50,7 @@ from branchops.domain.entities.analysis import (
     AnalysisResult,
     Classification,
     FieldAssessment,
+    InvestigationResult,
     Recommendation,
     ScoreResult,
     SimilarIssue,
@@ -50,6 +61,7 @@ from branchops.domain.entities.issue import CanonicalIssue
 from branchops.domain.enums import AnalysisStatus, RelationshipType, StepStatus
 from branchops.domain.services.prompt_injection import detect_prompt_injection
 from branchops.domain.services.signatures import error_signature
+from branchops.domain.value_objects import EvidenceRef
 from branchops.infrastructure.observability.telemetry import get_instruments, tracer
 from branchops.scoring.engine import resolve_fields, score_issue
 from branchops.scoring.policies import ScoringPolicy
@@ -66,6 +78,7 @@ NODES = (
     "assess_quality",
     "score",
     "similarity",
+    "investigate",
     "recommend",
     "persist",
 )
@@ -117,7 +130,11 @@ class IssueAnalysisWorkflow:
         settings: WorkflowSettings,
         checkpointer: Any = None,
         progress: ProgressReporter | None = None,
+        text_filter: Callable[[str], str] | None = None,
+        investigation_reader: InvestigationReader | None = None,
     ) -> None:
+        """``text_filter`` (PII masking) is applied to error text and to every text the model wrote before
+        anything is stored: model output is untrusted and may echo or invent personal data."""
         self._caller = caller
         self._registry = registry
         self._policy = policy
@@ -129,13 +146,24 @@ class IssueAnalysisWorkflow:
         self._assessor = QualityAssessmentAgent(caller)
         self._similarity = SimilarityAgent(caller)
         self._recommender = RecommendationAgent(caller)
+        self._reader = investigation_reader
+        self._investigator = (
+            InvestigationAgent(caller, investigation_reader)
+            if investigation_reader is not None and settings.investigation.enabled
+            else None
+        )
         self._checkpointer = checkpointer
         self._progress: ProgressReporter = progress or NullProgressReporter()
+        self._filter: Callable[[str], str] = text_filter or (lambda t: t)
         self.graph = self._build().compile(checkpointer=checkpointer)
 
     @property
     def model_id(self) -> str:
         return self._caller.provider.model_id
+
+    @property
+    def provider(self) -> ModelProvider:
+        return self._caller.provider
 
     # --- graph ----------------------------------------------------------------------------------
 
@@ -152,6 +180,7 @@ class IssueAnalysisWorkflow:
             ("assess_quality", self._assess_quality, transient_retry),
             ("score", self._score, None),
             ("similarity", self._similarity_node, transient_retry),
+            ("investigate", self._investigate, transient_retry),
             ("recommend", self._recommend, transient_retry),
             ("persist", self._persist, None),
         ]
@@ -216,7 +245,9 @@ class IssueAnalysisWorkflow:
             try:
                 final: AnalysisState = self.graph.invoke(inputs, config)  # type: ignore[assignment]
             except Exception as exc:
-                self._progress.run_failed(initial["analysis_id"], f"{type(exc).__name__}: {exc}")
+                self._progress.run_failed(
+                    initial["analysis_id"], self._filter(f"{type(exc).__name__}: {exc}")
+                )
                 raise
         if self._checkpointer is not None:
             try:
@@ -239,8 +270,11 @@ class IssueAnalysisWorkflow:
         except ModelUnavailableError as exc:
             if not state.get("allow_degraded", False):
                 raise
-            return None, timer.record(StepStatus.FAILED, error=str(exc)), f"{step}: {exc}"
+            message = self._filter(str(exc))
+            # DEGRADED (not FAILED): the cause is transient, the analysis is eligible for recovery.
+            return None, timer.record(StepStatus.DEGRADED, error=message), f"{step}: {message}"
         except _RECOVERABLE as exc:
+            message = self._filter(str(exc))
             usage = getattr(exc, "usage", None)
             record = timer.record(
                 StepStatus.FAILED,
@@ -248,9 +282,9 @@ class IssueAnalysisWorkflow:
                 model_id=self.model_id,
                 prompt_tokens=usage.prompt_tokens if usage else 0,
                 completion_tokens=usage.completion_tokens if usage else 0,
-                error=str(exc),
+                error=message,
             )
-            return None, record, f"{step}: {exc}"
+            return None, record, f"{step}: {message}"
         if stats is None:
             return value, timer.record(StepStatus.SKIPPED), None
         record = timer.record(
@@ -440,6 +474,7 @@ class IssueAnalysisWorkflow:
                 candidates=by_key,
                 correlation_id=state["correlation_id"],
                 deadline=self._deadline(),
+                sources=state["sources"],
             )
             return verified, result.stats if result else None
 
@@ -463,6 +498,59 @@ class IssueAnalysisWorkflow:
             "steps": [retrieve_record, record],
             "errors": [error] if error else [],
             "degraded": ["similarity"] if error else [],
+        }
+
+    _INVESTIGATE_ON = frozenset(
+        {
+            RelationshipType.DUPLICATE_CANDIDATE.value,
+            RelationshipType.RELATED.value,
+            RelationshipType.POSSIBLE_COMMON_CAUSE.value,
+        }
+    )
+
+    def _investigate(self, state: AnalysisState) -> dict[str, Any]:
+        """Bounded historical investigation; runs only when there is history worth looking at."""
+        timer = _StepTimer("investigate")
+        linked = [s for s in state.get("similar", []) if s.get("relationship") in self._INVESTIGATE_ON]
+        if self._investigator is None or self._reader is None or not (linked or state.get("recurring")):
+            return {"investigation": None, "steps": [timer.record(StepStatus.SKIPPED)]}
+        canonical = CanonicalIssue.model_validate(state["canonical"])
+        current = {
+            "incident_key": canonical.incident_key,
+            "summary": canonical.value("summary"),
+            "error_details": canonical.value("error_details"),
+            "application": canonical.value("application"),
+            "branch_code": canonical.value("branch_code"),
+            "category": canonical.value("category"),
+            "error_signature": error_signature(
+                canonical.value("application"), canonical.value("error_details")
+            ),
+        }
+        candidates = [
+            item
+            for item in (self._reader.issue_summary(s["incident_key"]) for s in linked[:5])
+            if item is not None
+        ]
+        cfg = self._settings.investigation
+        budget = InvestigationBudget(cfg.max_tool_calls, cfg.max_depth, cfg.max_seconds, cfg.max_tokens)
+
+        def call() -> tuple[InvestigationResult, Any]:
+            return self._investigator.run(  # type: ignore[union-attr]
+                current=current,
+                candidates=candidates,
+                sources=state["sources"],
+                correlation_id=state["correlation_id"],
+                budget=budget,
+            )
+
+        value, record, error = self._llm_step(state, "investigate", call)
+        return {
+            "investigation": value.model_dump(mode="json")
+            if value is not None
+            else InvestigationResult(status="DEGRADED", stopped_reason=error).model_dump(mode="json"),
+            "steps": [record],
+            "errors": [error] if error else [],
+            "degraded": ["investigate"] if error else [],
         }
 
     def _recommend(self, state: AnalysisState) -> dict[str, Any]:
@@ -515,6 +603,52 @@ class IssueAnalysisWorkflow:
             else None
         )
         status = state.get("status") or self._final_status(state).value
+        f = self._filter
+
+        def quotes(refs: list[EvidenceRef]) -> list[EvidenceRef]:
+            # Unverified quotes are model output; verified ones come from masked text. Mask both anyway.
+            return [r.model_copy(update={"quote": f(r.quote)}) for r in refs]
+
+        classification = Classification.model_validate(cls) if cls else None
+        if classification is not None:
+            classification = classification.model_copy(
+                update={
+                    "rationale": f(classification.rationale) if classification.rationale else None,
+                    "evidence": quotes(classification.evidence),
+                }
+            )
+        assessments = [
+            a.model_copy(update={"reason": f(a.reason), "evidence": quotes(a.evidence)})
+            for a in (FieldAssessment.model_validate(x) for x in state.get("validated_assessments", []))
+        ]
+        recommendations = [Recommendation.model_validate(r) for r in state.get("recommendations", [])]
+        recommendations = [r.model_copy(update={"message": f(r.message)}) for r in recommendations]
+        similar = [
+            s.model_copy(
+                update={"rationale": f(s.rationale) if s.rationale else None, "evidence": quotes(s.evidence)}
+            )
+            for s in (SimilarIssue.model_validate(x) for x in state.get("similar", []))
+        ]
+        steps = [StepRecord.model_validate(s) for s in state.get("steps", [])]
+        investigation = (
+            InvestigationResult.model_validate(state["investigation"]) if state.get("investigation") else None
+        )
+        if investigation is not None:
+            investigation = investigation.model_copy(
+                update={
+                    "stopped_reason": f(investigation.stopped_reason)
+                    if investigation.stopped_reason
+                    else None,
+                    "findings": [
+                        x.model_copy(update={"statement": f(x.statement), "evidence": quotes(x.evidence)})
+                        for x in investigation.findings
+                    ],
+                    "tool_calls": [
+                        c.model_copy(update={"arguments": {k: f(v) for k, v in c.arguments.items()}})
+                        for c in investigation.tool_calls
+                    ],
+                }
+            )
         return AnalysisResult(
             analysis_id=state["analysis_id"],
             incident_key=state["incident_key"],
@@ -525,17 +659,19 @@ class IssueAnalysisWorkflow:
             started_at=datetime.fromisoformat(state["started_at"]),
             completed_at=datetime.now(UTC),
             status=AnalysisStatus(status),
-            classification=Classification.model_validate(cls) if cls else None,
+            classification=classification,
             template_id=state.get("template_id"),
             template_version=state.get("template_version"),
             scores=ScoreResult.model_validate(state["scores"]) if state.get("scores") else None,
-            assessments=[FieldAssessment.model_validate(a) for a in state.get("validated_assessments", [])],
-            recommendations=[Recommendation.model_validate(r) for r in state.get("recommendations", [])],
-            similar_issues=[SimilarIssue.model_validate(s) for s in state.get("similar", [])],
+            assessments=assessments,
+            recommendations=recommendations,
+            similar_issues=similar,
             recurring=state.get("recurring", False),
             recurring_count=state.get("recurring_count", 0),
             security_flags=state.get("security_flags", []),
-            steps=[StepRecord.model_validate(s) for s in state.get("steps", [])],
+            steps=steps,
+            recoverable=any(s.status is StepStatus.DEGRADED for s in steps),
+            investigation=investigation,
             errors=state.get("errors", []),
             model_id=state.get("model_id"),
             canonical_issue=canonical_issue,

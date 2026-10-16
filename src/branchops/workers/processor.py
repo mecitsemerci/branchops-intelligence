@@ -6,6 +6,7 @@ import logging
 import random
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from branchops.agents.base import StructuredOutputError
 from branchops.application.handlers.process_event import (
@@ -69,6 +70,23 @@ class InboxItemRunner:
         self._owner = owner
         self._inbox = InboxRepository()
 
+    def redact_dead_letters(self, event_ids: list[Any]) -> int:
+        """Mask the payload of events the lease reaper dead-lettered (the reaper itself is plain SQL)."""
+
+        def mask(payload: Any) -> Any:
+            masked = self._processor.redact_payload(payload)
+            return payload if masked is None else masked
+
+        if self._processor.redact_payload({}) is None:
+            return 0
+        with self._db.session() as s:
+            return self._inbox.redact(s, event_ids, mask)
+
+    def release(self, item: InboxItem) -> None:
+        """Give an unfinished event back without consuming an attempt (graceful shutdown)."""
+        with self._db.session() as s:
+            self._inbox.release(s, item.id, item.lease_owner, delay_seconds=0)
+
     def run(self, item: InboxItem) -> InboxStatus:
         token = correlation_id_var.set(item.correlation_id)
         instruments = get_instruments()
@@ -129,8 +147,16 @@ class InboxItemRunner:
             delay = backoff_seconds(
                 item.attempts, self._settings.backoff_base_seconds, self._settings.backoff_max_seconds
             )
+        redacted = self._processor.redact_payload(item.payload) if delay is None else None
         with self._db.session() as s:
-            status = self._inbox.fail(s, item.id, item.lease_owner, error=error, retry_in_seconds=delay)
+            status = self._inbox.fail(
+                s,
+                item.id,
+                item.lease_owner,
+                error=self._processor.safe_error(error),
+                retry_in_seconds=delay,
+                redacted_payload=redacted,
+            )
         get_instruments().worker_failures.add(
             1, {"kind": kind, "final": str(status is InboxStatus.DEAD_LETTER)}
         )

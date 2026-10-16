@@ -38,6 +38,7 @@ class AnalysisState(TypedDict, total=False):
     similar: list[dict[str, Any]]
     recurring: bool
     recurring_count: int
+    investigation: dict[str, Any] | None
     recommendations: list[dict[str, Any]]
     model_id: str | None
     status: str

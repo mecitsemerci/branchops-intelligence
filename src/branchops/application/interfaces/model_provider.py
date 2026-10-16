@@ -73,6 +73,14 @@ class ModelRequestError(ModelError):
     """Non-transient: request rejected (4xx, unsupported parameter, context too long)."""
 
 
+class ModelAccessError(ModelUnavailableError, ModelRequestError):
+    """The gateway refused access (401/403) or does not know the model/path (404).
+
+    A request error, but one that operations fix (rotated key, renamed model) rather than a property of the
+    incident: it is retried and recovered like an outage instead of degrading every analysis for good.
+    """
+
+
 class UnsupportedOutputModeError(ModelRequestError):
     """The endpoint rejected the requested response_format; caller should fall back."""
 

@@ -18,8 +18,14 @@ spec:
     spec:
       serviceAccountName: branchops-mcp
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      # The preStop sleep lets the router and Service endpoints drop the pod before the app stops accepting
+      # connections; the grace period covers it plus in-flight requests.
+      terminationGracePeriodSeconds: 45
       containers:
         - name: mcp
+          lifecycle:
+            preStop:
+              exec: {command: ["sleep", "5"]}
           image: branchops-intelligence
           args: ["mcp"]
           env:

@@ -174,6 +174,7 @@ class MockModelProvider:
             "ExtractionOutput": self._extract,
             "QualityAssessmentOutput": self._assess,
             "SimilarityOutput": self._similarity,
+            "InvestigationOutput": self._investigate,
             "RecommendationOutput": self._recommend,
             "ReportOutput": self._report,
         }.get(request.schema_name or "", lambda _p: {"ok": True})
@@ -344,12 +345,15 @@ class MockModelProvider:
         verdicts = []
         for c in payload.get("candidates", []):
             signals = set(c.get("shared_signals") or [])
-            if {"same_branch", "within_duplicate_window"} <= signals and (
-                "same_application" in signals or "same_error_signature" in signals
-            ):
+            anchored = bool(signals & {"same_application", "same_error_signature", "same_error_code"})
+            if {"same_branch", "within_duplicate_window"} <= signals and anchored:
                 rel = "DUPLICATE_CANDIDATE"
-            elif signals:
+            elif anchored:
                 rel = "RELATED"
+            elif {"same_category", "within_duplicate_window"} <= signals and (
+                signals & {"same_subcategory", "shared_concept"}
+            ):
+                rel = "POSSIBLE_COMMON_CAUSE"
             else:
                 rel = "UNRELATED"
             verdicts.append(
@@ -363,6 +367,38 @@ class MockModelProvider:
                 }
             )
         return {"verdicts": verdicts}
+
+    def _investigate(self, prompt: str) -> dict[str, Any]:
+        """Look at the first candidate once, then conclude: one quoted observation, one hypothesis."""
+        payload = parse_json_block(prompt, "candidates") or {}
+        history = parse_json_block(prompt, "history") or []
+        candidates = payload.get("candidates") or []
+        if candidates and not history and not payload.get("must_conclude"):
+            key = candidates[0]["incident_key"]
+            return {"action": "call_tool", "tool": "get_issue_summary", "arguments": {"incident_key": key}}
+        findings: list[dict[str, Any]] = []
+        if candidates:
+            first = candidates[0]
+            quote = (first.get("summary") or "")[:120]
+            findings.append(
+                {
+                    "statement": f"{first['incident_key']} kaydında benzer belirti bildirilmiş.",
+                    "kind": "OBSERVATION",
+                    "evidence": [{"source": f"incident:{first['incident_key']}", "quote": quote}]
+                    if quote
+                    else [],
+                    "related_incidents": [first["incident_key"]],
+                }
+            )
+            findings.append(
+                {
+                    "statement": "Ortak bir altyapı sorunu olabilir; doğrulanmadı.",
+                    "kind": "OBSERVATION",  # no evidence: Python stores it as a HYPOTHESIS
+                    "evidence": [],
+                    "related_incidents": [c["incident_key"] for c in candidates[:3]],
+                }
+            )
+        return {"action": "conclude", "findings": findings}
 
     def _recommend(self, prompt: str) -> dict[str, Any]:
         gaps = parse_json_block(prompt, "gaps") or []

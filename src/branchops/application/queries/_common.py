@@ -39,6 +39,8 @@ def _analysis_dict(a: Analysis) -> dict[str, Any]:
         "recurring_count": a.recurring_count,
         "security_flags": a.security_flags or [],
         "errors": a.errors or [],
+        "recoverable": a.recoverable,
+        "investigation": a.investigation,
         "prompt_tokens": a.prompt_tokens,
         "completion_tokens": a.completion_tokens,
     }

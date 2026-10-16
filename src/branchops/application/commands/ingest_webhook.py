@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -54,10 +55,14 @@ class InvalidWebhookPayloadError(ValueError):
 
 
 def parse_payload(body: bytes) -> dict[str, Any]:
+    if b"\\u0000" in body:  # JSON escape for NUL: PostgreSQL JSONB cannot store it
+        raise InvalidWebhookPayloadError("body contains NUL characters")
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise InvalidWebhookPayloadError("body is not valid UTF-8 JSON") from exc
+    except RecursionError as exc:
+        raise InvalidWebhookPayloadError("body is nested too deeply") from exc
     if not isinstance(payload, dict):
         raise InvalidWebhookPayloadError("body must be a JSON object")
     return payload
@@ -85,7 +90,11 @@ class IngestIncidentEvent:
         correlation_id: str,
         headers: Mapping[str, str] | None = None,
         event: IncidentEvent | None = None,
+        signed: bool = False,
     ) -> IngestResult:
+        """``signed``: the request body was authenticated by a signature (HMAC). Its idempotency key is then
+        derived from the signed body only, never from unsigned headers: re-sending a captured delivery with a
+        new ``X-Atlassian-Webhook-Identifier`` must still be recognised as a duplicate."""
         adapter = self._registry.get(source_id)  # UnknownSourceError for unknown/disabled sources
         if (payload is None) == (event is None):
             raise ValueError("pass exactly one of payload or event")
@@ -97,7 +106,11 @@ class IngestIncidentEvent:
             except SourcePayloadError as exc:
                 raise InvalidWebhookPayloadError(str(exc)) from exc
             stored = payload
-            key = adapter.idempotency_key(payload, headers or {})
+            key = (
+                f"sha256:{payload_digest(payload)}"
+                if signed
+                else adapter.idempotency_key(payload, headers or {})
+            )
         else:
             assert event is not None  # noqa: S101 - narrowed by the exactly-one check above
             if event.source != source_id:
@@ -107,6 +120,19 @@ class IngestIncidentEvent:
             # (A -> B -> A); unchanged re-imports are cheap no-ops in the worker (same analysis input hash).
             key = f"event:{payload_digest(stored)}"
 
+        if payload is not None and event.event_type is not IncidentEventType.UNSUPPORTED:
+            # Replay protection, fail-closed: the time must come from the (authenticated) body; an event
+            # that asserts no time, or one older than the window, is acknowledged and not stored.
+            assert isinstance(adapter, PushSourceAdapter)  # noqa: S101 - checked above
+            stamp = adapter.payload_timestamp(payload)
+            max_age = timedelta(days=self._settings.webhook.max_event_age_days)
+            if stamp is None or stamp < datetime.now(UTC) - max_age:
+                return IngestResult(
+                    IngestOutcome.IGNORED,
+                    correlation_id,
+                    reason="event has no timestamp or is older than webhook.max_event_age_days "
+                    "(replay protection)",
+                )
         if event.event_type is IncidentEventType.UNSUPPORTED:
             return IngestResult(
                 IngestOutcome.IGNORED, correlation_id, reason=f"unsupported event {event.raw_event_name}"

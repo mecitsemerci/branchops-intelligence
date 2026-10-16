@@ -21,6 +21,7 @@ database:
 
 webhook:
   max_body_bytes: 1048576          # request size limit for every push source
+  max_event_age_days: 7             # older (signed) events are ignored; must be < retention.inbox_days
 
 # Incident sources. Each enabled push source accepts POST /api/ingest/<id> (Jira also keeps the legacy
 # URL /api/webhooks/jira); pull sources are read by `branchops poll` / `branchops import`.
@@ -126,8 +127,10 @@ ticketing:
 retention:
   on_issue_deleted: soft_delete    # soft_delete | purge
   redact_deleted_comments: true
-  redact_inbox_payload_after_processing: true
+  redact_inbox_payload_after_processing: true   # also applies to dead letters
   attachments_days: 180
+  inbox_days: 30                   # finished inbox events (and their workflow checkpoints)
+  inbox_dead_letter_days: 90       # dead letters stay inspectable / replayable this long
 
 worker:
   concurrency: 2
@@ -175,12 +178,45 @@ workflow:
     duplicate_window_hours: 72
     recurring_window_days: 30
     recurring_threshold: 3
+    # Optional semantic retrieval with an approved internal embedding model (never the generative model).
+    embeddings:
+      enabled: false
+      base_url: null               # e.g. https://embeddings.ai-platform.bank.internal/v1
+      model: null
+      api_key_env: EMBEDDING_API_KEY
+      candidate_pool: 2000
+      top_k: 10
+      min_score: 0.75
+  # Optional bounded history investigation (read-only tools; only when related history exists).
+  investigation:
+    enabled: false
+    max_tool_calls: 4
+    max_depth: 3
+    max_seconds: 90
+    max_tokens: 12000
+
+# Source statuses that count as resolved (case-insensitive substrings) for reopen / recurrence analytics.
+analytics:
+  resolved_statuses: [çözüldü, kapatıldı, kapalı, tamamlandı, resolved, closed, done, cancelled, iptal]
+
+# Re-analysis of incidents whose analysis degraded because the model was unavailable (docs/model-integration.md).
+recovery:
+  enabled: true
+  interval_seconds: 60
+  base_delay_seconds: 300          # first retry, then doubling (75-100 % jitter)
+  max_delay_seconds: 21600
+  max_attempts: 6                  # then FAILED_PERMANENT (alert on branchops_recovery_analyses)
+  batch_size: 10                   # per tick and replica: no retry storm when the model returns
+  require_model_health: true
+  stale_running_minutes: 60
 
 templates:
   directory: /app/templates
 
 scoring:
-  version: "2026.10-1"
+  # Released versions are registered in src/branchops/scoring/policies.py (POLICY_HISTORY); a registered
+  # version always scores with its registered parameters. 2026.10-2 adds the non-specific text cap.
+  version: "2026.10-2"
   sufficient_completeness_credit: 1.0
   insufficient_completeness_credit: 1.0
   unknown_completeness_handling: CREDIT
@@ -189,6 +225,8 @@ scoring:
   unknown_quality_handling: CREDIT
   unknown_quality_credit: 0.0
   low_quality_threshold: 50
+  specificity_fields: [summary, description]
+  non_specific_level_cap: POOR
 
 security:
   auth_mode: oauth_proxy

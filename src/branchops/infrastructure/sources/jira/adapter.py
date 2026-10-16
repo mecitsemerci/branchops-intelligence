@@ -219,6 +219,13 @@ class JiraWebhookAdapter:
         delivery_id = lower.get(DELIVERY_ID_HEADER)
         return f"delivery:{delivery_id}" if delivery_id else f"sha256:{payload_digest(payload)}"
 
+    def payload_timestamp(self, payload: Mapping[str, Any]) -> datetime | None:
+        """Webhook ``timestamp`` (signed with the body), else the issue's ``updated``."""
+        stamp = parse_jira_datetime(payload.get("timestamp"))
+        if stamp is None:
+            stamp = parse_jira_datetime(_as_dict(_as_dict(payload.get("issue")).get("fields")).get("updated"))
+        return stamp
+
     def normalize(self, payload: Mapping[str, Any], transform: TextTransform | None = None) -> IncidentEvent:
         """Normalise a webhook payload. ``transform`` is applied to every free-text value (masking)."""
         if not isinstance(payload, Mapping):
@@ -239,7 +246,9 @@ class JiraWebhookAdapter:
         if project_key is None and issue_key:
             project_key = str(issue_key).split("-")[0]
 
-        changelog_items = (payload.get("changelog") or {}).get("items") or []
+        # A malformed changelog (list, string) is treated as absent instead of failing the whole event.
+        changelog = payload.get("changelog")
+        changelog_items = (changelog.get("items") if isinstance(changelog, Mapping) else None) or []
         changed: dict[str, Any] = {}
         for item in changelog_items if isinstance(changelog_items, list) else []:
             if not isinstance(item, dict):

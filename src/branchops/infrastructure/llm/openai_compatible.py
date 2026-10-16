@@ -19,6 +19,7 @@ from openai import OpenAI
 from branchops.application.interfaces.model_provider import (
     CompletionRequest,
     CompletionResult,
+    ModelAccessError,
     ModelHealth,
     ModelRequestError,
     ModelUnavailableError,
@@ -129,7 +130,7 @@ class OpenAICompatibleModelProvider:
             raise ModelUnavailableError(f"model endpoint error {exc.status_code}") from exc
         except (openai.AuthenticationError, openai.PermissionDeniedError) as exc:
             # Never include request headers / key material in the message.
-            raise ModelRequestError(f"model endpoint rejected credentials ({exc.status_code})") from exc
+            raise ModelAccessError(f"model endpoint rejected credentials ({exc.status_code})") from exc
         except openai.BadRequestError as exc:
             message = str(getattr(exc, "message", "")) or "bad request"
             if response_format is not None and any(h in message.lower() for h in _RESPONSE_FORMAT_HINTS):
@@ -138,6 +139,8 @@ class OpenAICompatibleModelProvider:
         except openai.APIStatusError as exc:
             if exc.status_code >= 500 or exc.status_code in (408, 429):
                 raise ModelUnavailableError(f"model endpoint error {exc.status_code}") from exc
+            if exc.status_code == 404:
+                raise ModelAccessError("model endpoint or model not found (404)") from exc
             if response_format is not None and exc.status_code in (400, 422):
                 raise UnsupportedOutputModeError(f"status {exc.status_code}") from exc
             raise ModelRequestError(f"model endpoint error {exc.status_code}") from exc

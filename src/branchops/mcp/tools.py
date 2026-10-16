@@ -171,8 +171,8 @@ class SimilarIncident(BaseModel):
     summary: str | None
     branch_code: str | None
     relationship: str = Field(
-        description="DUPLICATE_CANDIDATE, RELATED, UNVERIFIED_CANDIDATE (stored relationships), RECURRING "
-        "(same error signature) or TEXT_MATCH (full-text search)."
+        description="DUPLICATE_CANDIDATE, RELATED, POSSIBLE_COMMON_CAUSE (hypothesis), UNVERIFIED_CANDIDATE "
+        "(stored relationships), RECURRING (same error signature) or TEXT_MATCH (full-text search)."
     )
     text_rank: float = Field(description="PostgreSQL full-text rank; higher = more similar wording.")
     reasons: list[str]
@@ -244,7 +244,10 @@ class GroupScores(BaseModel):
 
 class FieldCount(BaseModel):
     field: str
-    count: int
+    count: int = Field(description="Analyses in which the field is confirmed MISSING.")
+    unknown: int = Field(
+        default=0, description="Analyses in which the field could not be determined (UNKNOWN)."
+    )
 
 
 class Improvement(BaseModel):
@@ -687,8 +690,9 @@ def register_tools(mcp: FastMCP, runtime: McpRuntime) -> None:
         """Find similar, duplicate or recurring incidents. Pass exactly one of `incident_key` or `text`.
 
         For an incident key: relationships verified by the analysis pipeline (DUPLICATE_CANDIDATE, RELATED,
-        UNVERIFIED_CANDIDATE) with their signals and rationale, then other incidents with the same error
-        signature (RECURRING). For text: PostgreSQL full-text matches (TEXT_MATCH), best rank first.
+        POSSIBLE_COMMON_CAUSE, UNVERIFIED_CANDIDATE) with their signals and rationale, then other incidents
+        with the same error signature (RECURRING). For text: PostgreSQL full-text matches (TEXT_MATCH), best
+        rank first.
         """
         caller = runtime.current_caller()
         if (incident_key is None) == (text is None):

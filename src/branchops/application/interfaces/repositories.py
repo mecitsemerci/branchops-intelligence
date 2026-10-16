@@ -22,6 +22,8 @@ class CandidateIssue:
     created_at: datetime | None
     text_rank: float
     source: str = "jira"
+    # Cosine similarity from the optional embedding retrieval (None = not retrieved semantically).
+    semantic_score: float | None = None
 
 
 class HistoricalIssueReader(Protocol):

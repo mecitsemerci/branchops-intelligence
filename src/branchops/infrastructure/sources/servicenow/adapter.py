@@ -197,6 +197,10 @@ class ServiceNowWebhookAdapter:
             return f"{sys_id}:{updated_on}:{sn_raw(payload.get('event')) or ''}"
         return f"sha256:{payload_digest(payload)}"
 
+    def payload_timestamp(self, payload: Mapping[str, Any]) -> datetime | None:
+        """``sys_updated_on`` of the record (the Business Rule sends it with every event)."""
+        return parse_servicenow_datetime(sn_raw(payload.get("sys_updated_on")))
+
     def normalize(self, payload: Mapping[str, Any], transform: TextTransform | None = None) -> IncidentEvent:
         """Normalise a webhook payload. ``transform`` is applied to every free-text value (masking)."""
         if not isinstance(payload, Mapping):

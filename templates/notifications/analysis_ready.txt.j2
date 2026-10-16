@@ -6,6 +6,7 @@
 Kategori: {{ category or "—" }}
 Tamlık: {{ completeness if completeness is not none else "—" }} · Kalite: {{ quality if quality is not none else "—" }} (0-100)
 {% if missing_fields %}Eksik bilgiler: {{ missing_fields | join(", ") }}
+{% endif %}{% if unknown_required_fields %}Belirlenemeyen zorunlu bilgiler (kayıttan anlaşılamadı): {{ unknown_required_fields | join(", ") }}
 {% endif %}{% if similar %}Benzer kayıtlar: {{ similar | join(", ") }}
 {% endif %}{% if added_teams %}Analiz sonucu eklenen ekipler: {{ added_teams | join(", ") }}
 {% endif %}

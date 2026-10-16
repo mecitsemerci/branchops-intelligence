@@ -124,9 +124,20 @@ class EventProcessor:
                 lock_conn.commit()
 
     def _redacted(self, item: InboxItem) -> dict[str, Any] | None:
+        redacted: dict[str, Any] | None = self.redact_payload(item.payload)
+        return redacted
+
+    def redact_payload(self, payload: Any) -> Any:
+        """Masked copy of a stored payload, or ``None`` when redaction is disabled by configuration."""
         if not self._settings.retention.redact_inbox_payload_after_processing:
             return None
-        return mask_json(item.payload, self._masker)  # type: ignore[no-any-return]
+        return mask_json(payload, self._masker)
+
+    def safe_error(self, text: str) -> str:
+        """Error text fit for storage: PII masked and SQL parameter dumps cut (exception messages from the
+        database driver embed the bound values, i.e. incident text)."""
+        text = text.split("\n[parameters:", 1)[0].split("\n[SQL:", 1)[0]
+        return (self._masker.mask_text(text) or "")[:4000]
 
     def _process_locked(self, item: InboxItem, incident_key: str) -> ProcessOutcome:
         event_type = IncidentEventType(item.event_type)
@@ -158,6 +169,17 @@ class EventProcessor:
                 # Persist any mutation (incl. tombstones and version bumps), not only content changes.
                 if current is None or snapshot.model_dump(mode="json") != current.model_dump(mode="json"):
                     self._issues.save_snapshot(session, snapshot)
+                    previous_status = current.status if current is not None else None
+                    if snapshot.status != previous_status and snapshot.status is not None:
+                        # The merge only accepts newer status values, so this is a real transition.
+                        self._issues.record_status_change(
+                            session,
+                            incident_key,
+                            from_status=previous_status,
+                            to_status=snapshot.status,
+                            changed_at=event.source_updated_at or event.event_timestamp or datetime.now(UTC),
+                            is_resolved=self._settings.analytics.is_resolved,
+                        )
                 if event_type is IncidentEventType.RECORD_DELETED:
                     return self._apply_deletion(session, item, incident_key)
                 if merged.ignored_stale and not merged.applied:

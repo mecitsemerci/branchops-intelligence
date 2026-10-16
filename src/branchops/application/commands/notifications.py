@@ -73,6 +73,8 @@ class IncidentFacts:
     completeness: float | None = None
     quality: float | None = None
     missing_fields: list[str] = field(default_factory=list)
+    # Required fields the analysis could not determine (UNKNOWN), listed apart from confirmed gaps.
+    unknown_required_fields: list[str] = field(default_factory=list)
     similar: list[str] = field(default_factory=list)
     attachment_count: int = 0
     update_text: str | None = None
@@ -102,6 +104,10 @@ def facts_from_db(s: Session, incident_key: str, masker: SensitiveDataMasker) ->
                 facts.completeness = round(c, 1) if c is not None else None
                 facts.quality = round(q, 1) if q is not None else None
                 facts.missing_fields = [FIELD_LABELS_TR.get(f, f) for f in analysis.missing_fields or []]
+                unknown = set(analysis.unknown_fields or [])
+                facts.unknown_required_fields = [
+                    FIELD_LABELS_TR.get(f, f) for f in analysis.missing_required_fields or [] if f in unknown
+                ]
                 facts.similar = [
                     str(x.get("incident_key") or x.get("issue_key"))
                     for x in (analysis.similar_issues or [])[:5]
@@ -184,6 +190,7 @@ class NotificationComposer:
             ("Ekran", ctx.get("screen") or ctx.get("screen_key")),
             ("Sahip ekip", ctx.get("owner")),
             ("Eksik bilgiler", ", ".join(ctx.get("missing_fields") or []) or None),
+            ("Belirlenemeyen", ", ".join(ctx.get("unknown_required_fields") or []) or None),
             ("Ekler", f"{ctx['attachment_count']} dosya" if ctx.get("attachment_count") else None),
             ("Nöbetçi", ctx.get("oncall_contact") if ctx.get("off_hours") else None),
         ]

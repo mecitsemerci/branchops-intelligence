@@ -62,6 +62,11 @@ class PushSourceAdapter(SourceAdapter, Protocol):
         caller)."""
         ...
 
+    def payload_timestamp(self, payload: Mapping[str, Any]) -> datetime | None:
+        """When the source says the event happened, read from the payload body only (never the receive
+        time). Used for replay protection; ``None`` means the payload asserts no time."""
+        ...
+
 
 @runtime_checkable
 class PullSourceAdapter(SourceAdapter, Protocol):

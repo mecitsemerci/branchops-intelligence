@@ -86,6 +86,8 @@ class Instruments:
     mcp_tool_calls: Any
     mcp_tool_latency_ms: Any
     mcp_auth_failures: Any
+    recovery_events: Any
+    model_health_checks: Any
 
 
 @lru_cache(maxsize=1)
@@ -116,6 +118,14 @@ def get_instruments() -> Instruments:
         mcp_tool_latency_ms=m.create_histogram("mcp_tool_latency", unit="ms"),
         mcp_auth_failures=m.create_counter(
             "mcp_auth_failures", description="Rejected MCP requests (401/403/429) by reason"
+        ),
+        recovery_events=m.create_counter(
+            "branchops_recovery_events",
+            description="Recovery state machine events (recoverable_failure, enqueued, recovered, exhausted, "
+            "skipped_model_down, retry)",
+        ),
+        model_health_checks=m.create_counter(
+            "branchops_model_health_checks", description="Model health probes by result"
         ),
     )
 

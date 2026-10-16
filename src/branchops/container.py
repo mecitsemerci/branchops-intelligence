@@ -11,7 +11,9 @@ from branchops.agents.base import StructuredCaller
 from branchops.application.interfaces.model_provider import ModelProvider
 from branchops.application.interfaces.source_adapter import SourceRegistry
 from branchops.config.settings import Settings
+from branchops.domain.services.masking import SensitiveDataMasker
 from branchops.infrastructure.database.session import Database, create_db_engine
+from branchops.infrastructure.llm.audit import AuditingModelProvider
 from branchops.infrastructure.llm.mock_provider import MockModelProvider
 from branchops.infrastructure.llm.openai_compatible import OpenAICompatibleModelProvider
 from branchops.infrastructure.persistence.analysis_repository import DatabaseAnalysisSink
@@ -77,7 +79,7 @@ class Container:
     def build_workflow(self, provider: ModelProvider | None = None) -> Any:
         from branchops.workflows.issue_analysis import IssueAnalysisWorkflow
 
-        provider = provider or create_model_provider(self.settings)
+        provider = AuditingModelProvider(provider or create_model_provider(self.settings))
         caller = StructuredCaller(
             provider,
             max_repair_attempts=self.settings.workflow.max_repair_attempts,
@@ -90,12 +92,33 @@ class Container:
             caller=caller,
             registry=self.registry,
             policy=self.settings.scoring,
-            history=SessionBoundHistoryReader(self.db, IssueRepository()),
-            sink=DatabaseAnalysisSink(self.db),
+            history=self.history_reader(),
+            sink=DatabaseAnalysisSink(self.db, recovery=self.settings.recovery),
             settings=self.settings.workflow,
             checkpointer=checkpointer,
             progress=DatabaseProgressReporter(self.db),
+            text_filter=SensitiveDataMasker(self.settings.security.masking_extra_patterns).mask_str,
+            investigation_reader=self.investigation_reader(),
         )
+
+    def investigation_reader(self) -> Any:
+        if not self.settings.workflow.investigation.enabled:
+            return None
+        from branchops.infrastructure.persistence.investigation_repository import DatabaseInvestigationReader
+
+        return DatabaseInvestigationReader(self.db, self.settings.workflow.similarity.lookback_days)
+
+    def history_reader(self) -> Any:
+        """Full-text history; with ``similarity.embeddings.enabled`` hybrid (adds internal-embedding hits)."""
+        lexical = SessionBoundHistoryReader(self.db, IssueRepository())
+        emb = self.settings.workflow.similarity.embeddings
+        if not emb.enabled:
+            return lexical
+        from branchops.infrastructure.llm.embeddings import OpenAICompatibleEmbeddingProvider
+        from branchops.infrastructure.persistence.embedding_repository import HybridHistoryReader
+
+        embedder = OpenAICompatibleEmbeddingProvider(emb, self.settings.network)
+        return HybridHistoryReader(lexical, self.db, embedder, emb)
 
     def close(self) -> None:
         for c in self._closeables:

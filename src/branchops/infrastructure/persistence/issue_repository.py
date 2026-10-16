@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,11 +12,14 @@ from sqlalchemy.orm import Session
 
 from branchops.application.interfaces.repositories import CandidateIssue
 from branchops.domain.entities.incident import IncidentSnapshot, parse_incident_key
+from branchops.domain.services.lexicon import expand_query
 from branchops.infrastructure.database.models import (
     Analysis,
     Issue,
     IssueComment,
+    IssueEmbedding,
     IssueRelationship,
+    IssueStatusEvent,
 )
 from branchops.infrastructure.database.session import Database
 
@@ -123,6 +127,8 @@ class IssueRepository:
         """
         session.execute(delete(Analysis).where(Analysis.incident_key == incident_key))
         session.execute(delete(IssueComment).where(IssueComment.incident_key == incident_key))
+        session.execute(delete(IssueEmbedding).where(IssueEmbedding.incident_key == incident_key))
+        session.execute(delete(IssueStatusEvent).where(IssueStatusEvent.incident_key == incident_key))
         session.execute(
             delete(IssueRelationship).where(
                 (IssueRelationship.source_incident_key == incident_key)
@@ -153,13 +159,43 @@ class IssueRepository:
             )
         )
 
+    def record_status_change(
+        self,
+        session: Session,
+        incident_key: str,
+        *,
+        from_status: str | None,
+        to_status: str | None,
+        changed_at: datetime,
+        is_resolved: Callable[[str | None], bool],
+    ) -> None:
+        """Append a source status transition and keep ``issues.resolved_at`` in step with it."""
+        resolved = is_resolved(to_status)
+        session.add(
+            IssueStatusEvent(
+                incident_key=incident_key,
+                from_status=from_status,
+                to_status=to_status,
+                from_resolved=is_resolved(from_status),
+                resolved=resolved,
+                changed_at=changed_at,
+            )
+        )
+        session.execute(
+            update(Issue)
+            .where(Issue.incident_key == incident_key)
+            .values(resolved_at=changed_at if resolved else None)
+        )
+
     def latest_input_hash(self, session: Session, incident_key: str) -> str | None:
         return session.execute(
             select(Analysis.input_hash)
-            # RUNNING/FAILED rows are in-flight or aborted attempts and must not suppress a retry.
+            # RUNNING/FAILED rows are in-flight or aborted attempts and must not suppress a retry; a result
+            # degraded by a model outage is provisional, so an unchanged redelivery re-analyses it.
             .where(
                 Analysis.incident_key == incident_key,
                 Analysis.status.in_(["COMPLETED", "PARTIAL", "NEEDS_REVIEW"]),
+                Analysis.recoverable.is_(False),
             )
             .order_by(Analysis.started_at.desc())
             .limit(1)
@@ -178,7 +214,8 @@ class IssueRepository:
             _CANDIDATES_SQL,
             {
                 "incident_key": incident_key,
-                "query": query_text[:2000],
+                # Domain synonyms widen recall ("para sayma makinesi" ~ "banknot sayım cihazı").
+                "query": expand_query(query_text[:1500])[:2000],
                 "signature": error_signature,
                 "days": lookback_days,
                 "limit": limit,
