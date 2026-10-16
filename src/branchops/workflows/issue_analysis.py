@@ -1,8 +1,12 @@
 """Bounded LangGraph workflow: normalise → classify → template → extract → assess → score → similarity →
-recommend → persist.
+investigate (optional, only with relevant history) → recommend → persist.
 
-The graph is a fixed linear pipeline (no model-driven routing, no tools, recursion limit enforced). Model
-steps degrade gracefully: non-transient failures produce partial results, transient unavailability
+The graph is a fixed linear pipeline (no model-driven routing, recursion limit enforced). The only step in
+which the model chooses actions is the optional ``investigate`` step: allow-listed read-only tools behind a
+typed port, bounded by tool calls, depth, time and tokens, skipped deterministically when the similarity
+step found no relevant history (``agents/investigation.py``).
+
+Model steps degrade gracefully: non-transient failures produce partial results, transient unavailability
 re-raises so the inbox retries the event later, except on the last attempt (``allow_degraded``) where a
 partial analysis is persisted instead of losing the event.
 """
@@ -23,10 +27,12 @@ from langgraph.types import RetryPolicy
 from branchops.agents.base import StructuredCaller, StructuredOutputError
 from branchops.agents.classification import ClassificationAgent
 from branchops.agents.extraction import ExtractionAgent, ExtractionOutput, build_canonical_issue
+from branchops.agents.investigation import InvestigationAgent, InvestigationBudget
 from branchops.agents.prompts import issue_data_block, issue_sources
 from branchops.agents.quality_assessment import QualityAssessmentAgent
 from branchops.agents.recommendation import RecommendationAgent, deterministic_recommendations
 from branchops.agents.similarity import IssueFingerprint, SimilarityAgent, shortlist
+from branchops.application.interfaces.investigation import InvestigationReader
 from branchops.application.interfaces.model_provider import (
     ModelProvider,
     ModelRequestError,
@@ -44,6 +50,7 @@ from branchops.domain.entities.analysis import (
     AnalysisResult,
     Classification,
     FieldAssessment,
+    InvestigationResult,
     Recommendation,
     ScoreResult,
     SimilarIssue,
@@ -70,6 +77,7 @@ NODES = (
     "assess_quality",
     "score",
     "similarity",
+    "investigate",
     "recommend",
     "persist",
 )
@@ -122,6 +130,7 @@ class IssueAnalysisWorkflow:
         checkpointer: Any = None,
         progress: ProgressReporter | None = None,
         text_filter: Callable[[str], str] | None = None,
+        investigation_reader: InvestigationReader | None = None,
     ) -> None:
         """``text_filter`` (PII masking) is applied to error text and to every text the model wrote before
         anything is stored: model output is untrusted and may echo or invent personal data."""
@@ -136,6 +145,12 @@ class IssueAnalysisWorkflow:
         self._assessor = QualityAssessmentAgent(caller)
         self._similarity = SimilarityAgent(caller)
         self._recommender = RecommendationAgent(caller)
+        self._reader = investigation_reader
+        self._investigator = (
+            InvestigationAgent(caller, investigation_reader)
+            if investigation_reader is not None and settings.investigation.enabled
+            else None
+        )
         self._checkpointer = checkpointer
         self._progress: ProgressReporter = progress or NullProgressReporter()
         self._filter: Callable[[str], str] = text_filter or (lambda t: t)
@@ -164,6 +179,7 @@ class IssueAnalysisWorkflow:
             ("assess_quality", self._assess_quality, transient_retry),
             ("score", self._score, None),
             ("similarity", self._similarity_node, transient_retry),
+            ("investigate", self._investigate, transient_retry),
             ("recommend", self._recommend, transient_retry),
             ("persist", self._persist, None),
         ]
@@ -483,6 +499,59 @@ class IssueAnalysisWorkflow:
             "degraded": ["similarity"] if error else [],
         }
 
+    _INVESTIGATE_ON = frozenset(
+        {
+            RelationshipType.DUPLICATE_CANDIDATE.value,
+            RelationshipType.RELATED.value,
+            RelationshipType.POSSIBLE_COMMON_CAUSE.value,
+        }
+    )
+
+    def _investigate(self, state: AnalysisState) -> dict[str, Any]:
+        """Bounded historical investigation; runs only when there is history worth looking at."""
+        timer = _StepTimer("investigate")
+        linked = [s for s in state.get("similar", []) if s.get("relationship") in self._INVESTIGATE_ON]
+        if self._investigator is None or self._reader is None or not (linked or state.get("recurring")):
+            return {"investigation": None, "steps": [timer.record(StepStatus.SKIPPED)]}
+        canonical = CanonicalIssue.model_validate(state["canonical"])
+        current = {
+            "incident_key": canonical.incident_key,
+            "summary": canonical.value("summary"),
+            "error_details": canonical.value("error_details"),
+            "application": canonical.value("application"),
+            "branch_code": canonical.value("branch_code"),
+            "category": canonical.value("category"),
+            "error_signature": error_signature(
+                canonical.value("application"), canonical.value("error_details")
+            ),
+        }
+        candidates = [
+            item
+            for item in (self._reader.issue_summary(s["incident_key"]) for s in linked[:5])
+            if item is not None
+        ]
+        cfg = self._settings.investigation
+        budget = InvestigationBudget(cfg.max_tool_calls, cfg.max_depth, cfg.max_seconds, cfg.max_tokens)
+
+        def call() -> tuple[InvestigationResult, Any]:
+            return self._investigator.run(  # type: ignore[union-attr]
+                current=current,
+                candidates=candidates,
+                sources=state["sources"],
+                correlation_id=state["correlation_id"],
+                budget=budget,
+            )
+
+        value, record, error = self._llm_step(state, "investigate", call)
+        return {
+            "investigation": value.model_dump(mode="json")
+            if value is not None
+            else InvestigationResult(status="DEGRADED", stopped_reason=error).model_dump(mode="json"),
+            "steps": [record],
+            "errors": [error] if error else [],
+            "degraded": ["investigate"] if error else [],
+        }
+
     def _recommend(self, state: AnalysisState) -> dict[str, Any]:
         template = self._template(state)
         scores = ScoreResult.model_validate(state["scores"])
@@ -544,6 +613,17 @@ class IssueAnalysisWorkflow:
         similar = [SimilarIssue.model_validate(s) for s in state.get("similar", [])]
         similar = [s.model_copy(update={"rationale": f(s.rationale)}) if s.rationale else s for s in similar]
         steps = [StepRecord.model_validate(s) for s in state.get("steps", [])]
+        investigation = (
+            InvestigationResult.model_validate(state["investigation"]) if state.get("investigation") else None
+        )
+        if investigation is not None:
+            investigation = investigation.model_copy(
+                update={
+                    "findings": [
+                        x.model_copy(update={"statement": f(x.statement)}) for x in investigation.findings
+                    ]
+                }
+            )
         return AnalysisResult(
             analysis_id=state["analysis_id"],
             incident_key=state["incident_key"],
@@ -566,6 +646,7 @@ class IssueAnalysisWorkflow:
             security_flags=state.get("security_flags", []),
             steps=steps,
             recoverable=any(s.status is StepStatus.DEGRADED for s in steps),
+            investigation=investigation,
             errors=state.get("errors", []),
             model_id=state.get("model_id"),
             canonical_issue=canonical_issue,

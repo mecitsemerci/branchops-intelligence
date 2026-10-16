@@ -158,6 +158,8 @@ class Analysis(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Bounded historical investigation (optional step): tool calls and evidence-checked findings.
+    investigation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # A step degraded because the model was unavailable: provisional result, eligible for recovery.
     recoverable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

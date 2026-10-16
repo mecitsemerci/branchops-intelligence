@@ -13,6 +13,7 @@ WORKFLOW_NODES: tuple[tuple[str, str, bool], ...] = (
     ("assess_quality", "Kalite Değerlendirme Ajanı", True),
     ("score", "Puanlama Motoru", False),
     ("similarity", "Benzerlik Ajanı", True),
+    ("investigate", "Geçmiş İnceleme Ajanı", True),
     ("recommend", "Öneri Ajanı", True),
     ("persist", "Kaydetme", False),
 )

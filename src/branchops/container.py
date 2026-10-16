@@ -97,7 +97,15 @@ class Container:
             checkpointer=checkpointer,
             progress=DatabaseProgressReporter(self.db),
             text_filter=SensitiveDataMasker(self.settings.security.masking_extra_patterns).mask_str,
+            investigation_reader=self.investigation_reader(),
         )
+
+    def investigation_reader(self) -> Any:
+        if not self.settings.workflow.investigation.enabled:
+            return None
+        from branchops.infrastructure.persistence.investigation_repository import DatabaseInvestigationReader
+
+        return DatabaseInvestigationReader(self.db, self.settings.workflow.similarity.lookback_days)
 
     def history_reader(self) -> Any:
         """Full-text history; with ``similarity.embeddings.enabled`` hybrid (adds internal-embedding hits)."""

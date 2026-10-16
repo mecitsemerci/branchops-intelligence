@@ -71,6 +71,7 @@ class AnalysisRepository:
             "security_flags": result.security_flags,
             "errors": result.errors,
             "recoverable": result.recoverable,
+            "investigation": result.investigation.model_dump(mode="json") if result.investigation else None,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "started_at": result.started_at,

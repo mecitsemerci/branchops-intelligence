@@ -187,6 +187,13 @@ workflow:
       candidate_pool: 2000
       top_k: 10
       min_score: 0.75
+  # Optional bounded history investigation (read-only tools; only when related history exists).
+  investigation:
+    enabled: false
+    max_tool_calls: 4
+    max_depth: 3
+    max_seconds: 90
+    max_tokens: 12000
 
 # Re-analysis of incidents whose analysis degraded because the model was unavailable (docs/model-integration.md).
 recovery:

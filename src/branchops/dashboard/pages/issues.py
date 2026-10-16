@@ -356,3 +356,33 @@ def _similar_panel(relationships: list[dict[str, Any]], analysis: dict[str, Any]
     rows = [{**r, "signals": ", ".join(r.get("signals") or [])} for r in relationships]
     table = ui.table(columns=cols, rows=rows, row_key="incident_key").classes("w-full")
     table.on("rowClick", lambda e: ui.navigate.to(issue_url(e.args[1]["incident_key"])))
+    _investigation_panel((analysis or {}).get("investigation"))
+
+
+KIND_TR = {"OBSERVATION": "Gözlem (kanıtlı)", "HYPOTHESIS": "Hipotez (doğrulanmadı)"}
+
+
+def _investigation_panel(investigation: dict[str, Any] | None) -> None:
+    """Findings of the bounded history investigation; hypotheses are labelled as such."""
+    if not investigation:
+        return
+    ui.label("Geçmiş incelemesi").classes("font-semibold mt-4")
+    tools = ", ".join(c["tool"] for c in investigation.get("tool_calls", [])) or "—"
+    ui.label(
+        f"Durum: {investigation.get('status')} · Araçlar: {tools}"
+        + (
+            f" · Durma nedeni: {investigation['stopped_reason']}"
+            if investigation.get("stopped_reason")
+            else ""
+        )
+    ).classes("text-xs text-slate-500")
+    for finding in investigation.get("findings", []):
+        with ui.card().classes("w-full"):
+            ui.label(KIND_TR.get(finding.get("kind", ""), finding.get("kind", ""))).classes(
+                "text-xs font-semibold "
+                + ("text-green-700" if finding.get("kind") == "OBSERVATION" else "text-orange-700")
+            )
+            ui.label(finding.get("statement", ""))
+            for e in finding.get("evidence", []):
+                mark = "✓" if e.get("verified") else "✗"
+                ui.label(f"{mark} {e.get('source')}: “{e.get('quote')}”").classes("text-xs text-slate-600")

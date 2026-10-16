@@ -16,20 +16,21 @@ flowchart TD
     E --> Q[assess_quality<br/>QualityAssessmentAgent]
     Q --> SC[score<br/>Python quality engine]
     SC --> SI[similarity<br/>exact · signature · FTS+lexicon · opt. embeddings → shortlist → SimilarityAgent]
-    SI --> R[recommend<br/>template hints → RecommendationAgent]
+    SI --> I[investigate — optional<br/>only with related history · allow-listed read-only tools]
+    I --> R[recommend<br/>template hints → RecommendationAgent]
     R --> P[persist]
     P --> X([END])
 ```
 
 | Property | Implementation |
 |---|---|
-| Bounded | Linear graph, `recursion_limit = nodes + 5`, no conditional edges, no tool calls |
+| Bounded | Linear graph, `recursion_limit = nodes + 5`, no conditional edges; tool calls only in the optional `investigate` step (below) |
 | State | `workflows/state.py` — JSON-only TypedDict; reducers accumulate `steps`, `errors`, `degraded` |
 | Checkpoints | `PostgresSaver` (`workflow.checkpointer: postgres`); `thread_id = inbox:<event id>` so a retried event resumes after the last completed node; the thread is deleted after success |
 | Timeouts | HTTP timeout per call (`llm.timeout_seconds`) and a per-node budget (`workflow.node_timeout_seconds`) enforced before each model attempt (LangGraph cannot cancel sync nodes) |
 | Retries | Client retries (`llm.max_retries`) → node `RetryPolicy` (2 attempts, transient errors only) → inbox retry with exponential backoff |
 | Partial results | Non-transient failures (invalid output after repair, rejected request) mark the step `FAILED`, use a fallback and set status `PARTIAL` |
-| Model unavailable | Transient errors propagate so the inbox retries later; on the **last** inbox attempt `allow_degraded` is set and a partial analysis is persisted instead of dead-lettering |
+| Model unavailable | Transient errors propagate so the inbox retries later; on the **last** inbox attempt `allow_degraded` is set, the step is recorded `DEGRADED` and a provisional (recoverable) analysis is persisted; the recovery scheduler re-analyses it when the model is back ([model integration](model-integration.md#model-outages-and-recovery)) |
 | Manual review | Status `NEEDS_REVIEW` when classification is unavailable or prompt-injection indicators were found |
 
 Final status: `COMPLETED` · `PARTIAL` (some step degraded) · `NEEDS_REVIEW` · `FAILED` (not persisted by
@@ -66,6 +67,25 @@ finished step. Each graph node is wrapped (`_tracked`) to report start/finish; f
 | **SimilarityAgent** | current fingerprint + shortlisted candidates | verdict per candidate (`DUPLICATE_CANDIDATE/RELATED/POSSIBLE_COMMON_CAUSE/UNRELATED`) | candidates come only from the retrieval (SQL / optional embeddings); keys must be in the shortlist; `DUPLICATE_CANDIDATE` only if the duplicate gate passes (same branch + 72 h window + same application, error signature or specific error code: a shared subcategory alone is not enough); `RELATED` without a shared application/error code becomes `POSSIBLE_COMMON_CAUSE`; evidence quotes verified against the current record and the candidate texts; nothing is ever merged |
 | **RecommendationAgent** | gaps (missing/insufficient/unknown fields) + template hints | one Turkish message per gap | may only address gap fields; priorities are computed by Python; template hints are used when the model fails |
 | **ReportingAgent** | SQL metrics | title, summary, highlights | every number in the text must exist in the metrics, otherwise a deterministic report is used |
+
+### Adaptive investigation (`agents/investigation.py`, optional)
+
+`workflow.investigation.enabled` is off by default. When it is on, the `investigate` step runs only if the
+similarity step found a duplicate, related or possible-common-cause incident, or a recurring error
+signature. Otherwise it is recorded as `SKIPPED` and costs nothing.
+
+| Control | Implementation |
+|---|---|
+| Tools | `search_history`, `get_issue_summary`, `issue_metadata`, `compare_error_signatures` and `known_resolutions`: read-only, typed arguments, parameterised queries behind the `InvestigationReader` port. The model never writes SQL. |
+| Allow-list | The tool name is a schema enum. `incident_key` arguments must be incidents already surfaced (candidates or earlier results). |
+| Bounds | `max_tool_calls` (4), `max_depth` model turns (3), `max_seconds` (90), `max_tokens` (12 000), and an optional cancellation event. The last turn must conclude: a model that keeps asking for tools fails the schema and the step degrades. |
+| Evidence | Every finding is checked by Python. A quote must occur verbatim in the current record or a tool result. A statement without verified evidence is stored as `HYPOTHESIS`, never as an observation. Related incident keys are limited to surfaced ones. |
+| Data | Tool results are masked summaries. Results from other records are passed as untrusted data inside `<history>`. Findings are PII-masked before storage (`analyses.investigation`). |
+| Degradation | Errors and budget exhaustion never fail the analysis: the result is stored with status `DEGRADED` or `BUDGET_EXHAUSTED`. |
+
+Known resolutions: the sources provide no resolution text. `known_resolutions` returns earlier incidents
+with the same error signature whose source status is resolved or closed, with their status and time. It is
+evidence that the problem was closed before, not of how it was fixed.
 
 ### Prompt-injection posture
 

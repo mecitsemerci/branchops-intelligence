@@ -373,6 +373,20 @@ class SimilaritySettings(BaseModel):
     embeddings: EmbeddingSettings = EmbeddingSettings()
 
 
+class InvestigationSettings(BaseModel):
+    """Optional bounded historical investigation after the similarity step (off by default).
+
+    It runs only when the similarity step found a related/duplicate/possible-common-cause incident or a
+    recurring error signature; the model can only call allow-listed read-only tools.
+    """
+
+    enabled: bool = False
+    max_tool_calls: int = Field(default=4, ge=1, le=10)
+    max_depth: int = Field(default=3, ge=1, le=6)  # model turns that may call a tool
+    max_seconds: float = Field(default=90.0, ge=5)
+    max_tokens: int = Field(default=12_000, ge=1000)
+
+
 class WorkflowSettings(BaseModel):
     checkpointer: Literal["postgres", "memory", "none"] = "postgres"
     node_timeout_seconds: float = 300.0
@@ -380,6 +394,7 @@ class WorkflowSettings(BaseModel):
     max_input_chars: int = 24_000
     prompt_version: str = "2026.10-3"
     similarity: SimilaritySettings = SimilaritySettings()
+    investigation: InvestigationSettings = InvestigationSettings()
 
 
 class TemplateSettings(BaseModel):
