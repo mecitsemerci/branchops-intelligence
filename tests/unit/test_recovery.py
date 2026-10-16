@@ -114,3 +114,26 @@ def test_health_probe_caches_and_never_raises() -> None:
     assert probe.check(force=True) and ok.calls == 2
     broken = ModelHealthProbe(_Provider(RuntimeError("boom")), ttl_seconds=0)  # type: ignore[arg-type]
     assert broken.check() is False and broken.detail == "RuntimeError"
+
+
+def test_model_calls_are_audited_without_content(caplog: pytest.LogCaptureFixture) -> None:
+    from branchops.application.interfaces.model_provider import ChatMessage, CompletionRequest
+    from branchops.infrastructure.llm.audit import AuditingModelProvider
+    from tests.helpers import ScriptedProvider, unavailable
+
+    secret_prompt = "Müşteri TCKN [TCKN] EFT hatası"
+    request = CompletionRequest(
+        messages=[ChatMessage("user", secret_prompt)],
+        agent="classify",
+        correlation_id="corr-9",
+        schema_name="X",
+    )
+    caplog.set_level("INFO", logger="branchops.model_audit")
+    AuditingModelProvider(ScriptedProvider()).complete(request)
+    with pytest.raises(ModelUnavailableError):
+        AuditingModelProvider(ScriptedProvider({"X": [unavailable]})).complete(request)
+    records = [r for r in caplog.records if r.name == "branchops.model_audit"]
+    assert [r.outcome for r in records] == ["ok", "ModelUnavailableError"]
+    ok = records[0].__dict__
+    assert ok["correlation_id"] == "corr-9" and len(ok["prompt_sha256"]) == 64 and ok["prompt_tokens"] >= 0
+    assert all(secret_prompt not in str(r.__dict__) for r in records)

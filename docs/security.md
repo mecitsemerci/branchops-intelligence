@@ -45,6 +45,35 @@ scores or credentials.
 | Ownership registry | ADMIN-only writes, every change in `ownership_changes`; deterministic routing (no model); route patterns restricted to literal / whole-`{param}` / final `*` segments so matching is linear (no ReDoS); CSV exports neutralise spreadsheet formulas (`=`, `+`, `-`, `@` prefixed with `'`); CSV import all-or-nothing | `domain/entities/ownership.py`, `ownership_repository.py` |
 | Production guard rails | `app.environment: production` refuses `auth_mode: dev`, the mock model provider and non-HTTPS model URLs; `branchops mcp` additionally refuses to start without `mcp.teams` and refuses `--stdio`; reporting requires `BRANCHOPS_PSEUDONYM_KEY`; Jira ticketing requires an https `base_url` and token; SMTP requires `smtp_host`, Zoom an https `webhook_base_url`; the worker refuses to start unless the branch operations team exists, is active and has a working channel | `config/settings.py`, `cli.py` |
 
+## AI data flow
+
+```mermaid
+flowchart LR
+    W[Webhook body<br/>raw, untrusted] -->|HMAC/token, size, replay window| I[(Inbox<br/>raw until processed)]
+    I -->|mask PII| S[Snapshot<br/>masked]
+    S -->|delimited JSON envelope| P[Prompt]
+    P -->|internal TLS, CA-verified| M[Internal model]
+    M -->|schema validation, evidence check| O[Model output<br/>untrusted]
+    O -->|mask PII again| A[(Analysis)]
+    I -->|masked on completion and on dead letter| I
+```
+
+| Stage | Control |
+|---|---|
+| Before the model | Text is masked at normalisation, so the prompt is built from the masked snapshot only. In-app `app_context` and attachments never reach a prompt. |
+| Model calls | Every call writes a content-free audit record (`branchops.model_audit` logger): correlation id, agent, schema, model, prompt SHA-256 and size, tokens, latency, finish reason, outcome. Prompts and outputs are never logged. |
+| Model output | Schema-bound output and context validators, then evidence verification (quotes of 3 or more characters that occur verbatim). Similarity evidence is checked against the candidate texts too. Investigation findings without verified evidence become `HYPOTHESIS`. Unverified quotes, rationales, recommendations and findings are PII-masked before storage. Reasoning (`<think>`, `reasoning_content`) is discarded. |
+| Tools | Only the optional investigation step calls tools. They are allow-listed, read-only and typed, behind a repository port; no SQL comes from the model, and incident keys are limited to surfaced ones. |
+| Errors | Stored error text (`webhook_inbox.last_error`, `analyses.errors`, `agent_steps.error`) is PII-masked, and database parameter dumps are cut. API errors return no internals. |
+| Scope | Investigation results, which name other incidents, go only to unrestricted callers (dashboard/REST roles), never to team-scoped MCP callers. |
+| Retention | Raw payloads are masked after processing *and* on dead letter. Finished inbox events and their workflow checkpoints are deleted after `retention.inbox_days` (dead letters after `inbox_dead_letter_days`). |
+
+Not covered (operator responsibility):
+
+* `analyses`, `agent_steps`, `audit_log` and outbox rows have no automatic retention yet. Define
+  partition/archive jobs according to the bank's retention policy.
+* Free-form personal data (names, addresses) is not detected by the pattern-based masker.
+
 ## Residual risks and operator responsibilities
 
 * **Masking is pattern-based.** Free-form personal data (names, addresses) is not detected. Add bank

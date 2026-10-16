@@ -13,6 +13,7 @@ from branchops.application.interfaces.source_adapter import SourceRegistry
 from branchops.config.settings import Settings
 from branchops.domain.services.masking import SensitiveDataMasker
 from branchops.infrastructure.database.session import Database, create_db_engine
+from branchops.infrastructure.llm.audit import AuditingModelProvider
 from branchops.infrastructure.llm.mock_provider import MockModelProvider
 from branchops.infrastructure.llm.openai_compatible import OpenAICompatibleModelProvider
 from branchops.infrastructure.persistence.analysis_repository import DatabaseAnalysisSink
@@ -78,7 +79,7 @@ class Container:
     def build_workflow(self, provider: ModelProvider | None = None) -> Any:
         from branchops.workflows.issue_analysis import IssueAnalysisWorkflow
 
-        provider = provider or create_model_provider(self.settings)
+        provider = AuditingModelProvider(provider or create_model_provider(self.settings))
         caller = StructuredCaller(
             provider,
             max_repair_attempts=self.settings.workflow.max_repair_attempts,
