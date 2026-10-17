@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-10-17T01:11:24+00:00",
+  "vllm_device": "cpu",
+  "host": "Apple M3 Pro, Docker Desktop 8 vCPU / 7.65 GiB, vllm/vllm-openai-cpu:v0.31.0",
+  "models": [
+    {
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "analyses": 20,
+      "duration_s": {
+        "min": 353.0,
+        "avg": 494.8,
+        "max": 608.3
+      },
+      "first_started": "2026-10-16T22:23:37+00:00",
+      "last_completed": "2026-10-17T01:08:44+00:00"
+    }
+  ],
+  "analysis_status": {
+    "COMPLETED": 18,
+    "NEEDS_REVIEW": 2
+  },
+  "category_of_analyses": {
+    "TRANSACTION": 18,
+    "none": 1,
+    "NETWORK": 1
+  },
+  "investigation": {
+    "by_result_status": {
+      "COMPLETED": {
+        "analyses": 15,
+        "tool_calls": 0,
+        "findings": 15
+      },
+      "not run": {
+        "analyses": 5,
+        "tool_calls": 0,
+        "findings": 0
+      }
+    },
+    "step_status": {
+      "SKIPPED": 5,
+      "SUCCEEDED": 15
+    },
+    "analyses_where_investigate_ran": 15,
+    "total_tool_calls": 0,
+    "tool_calls_by_tool": {},
+    "model_turns": {
+      "1": 15
+    },
+    "findings_by_kind": {
+      "OBSERVATION": 15
+    },
+    "evidence_quotes": {
+      "rejected": 2,
+      "verified": 26
+    }
+  },
+  "per_step_average": {
+    "extract": {
+      "avg_ms": 136735,
+      "avg_tokens": 2163
+    },
+    "assess_quality": {
+      "avg_ms": 135574,
+      "avg_tokens": 3151
+    },
+    "similarity.verify": {
+      "avg_ms": 122971,
+      "avg_tokens": 2718
+    },
+    "recommend": {
+      "avg_ms": 60070,
+      "avg_tokens": 1500
+    },
+    "investigate": {
+      "avg_ms": 39101,
+      "avg_tokens": 2161
+    },
+    "classify": {
+      "avg_ms": 38283,
+      "avg_tokens": 2046
+    },
+    "similarity.retrieve": {
+      "avg_ms": 6,
+      "avg_tokens": 0
+    },
+    "score": {
+      "avg_ms": 1,
+      "avg_tokens": 0
+    },
+    "select_template": {
+      "avg_ms": 0,
+      "avg_tokens": 0
+    },
+    "normalize": {
+      "avg_ms": 0,
+      "avg_tokens": 0
+    },
+    "persist": {
+      "avg_ms": 0,
+      "avg_tokens": 0
+    }
+  },
+  "relationships": {
+    "DUPLICATE_CANDIDATE": 1,
+    "POSSIBLE_COMMON_CAUSE": 29,
+    "RELATED": 6,
+    "UNVERIFIED_CANDIDATE": 10
+  }
+}
