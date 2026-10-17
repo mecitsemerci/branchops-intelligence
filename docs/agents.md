@@ -81,10 +81,12 @@ signature. Otherwise it is recorded as `SKIPPED` and costs nothing.
 |---|---|
 | Tools | `search_history`, `get_issue_summary`, `issue_metadata`, `compare_error_signatures` and `known_resolutions`: read-only, typed arguments, parameterised queries behind the `InvestigationReader` port. The model never writes SQL. |
 | Allow-list | The tool name is a schema enum. `incident_key` arguments must be incidents already surfaced (candidates or earlier results). |
+| Verify first | `min_tool_calls` (1, 0 disables): until the model has made that many tool calls, and while the budget allows another, the turn's schema (`InvestigationToolCall`) has no conclude action and the user turn says "You have not consulted any tool yet. Pick one tool to verify the candidates before concluding." A conclusion anyway gets the single repair turn; if the model concludes again, its findings are kept (evidence-checked as usual) and the result is `DEGRADED` with reason `CONCLUDED_WITHOUT_TOOLS`. The pipeline continues. |
 | Bounds | `max_tool_calls` (4), `max_depth` model turns (3), `max_seconds` (90), `max_tokens` (12 000), and an optional cancellation event. The last turn must conclude: a model that keeps asking for tools fails the schema and the step degrades. |
 | Evidence | Every finding is checked by Python. A quote must occur verbatim in the current record or a tool result. A statement without verified evidence is stored as `HYPOTHESIS`, never as an observation. Related incident keys are limited to surfaced ones. |
 | Data | Tool results are masked summaries. Results from other records are passed as untrusted data inside `<history>`. Findings are PII-masked before storage (`analyses.investigation`). |
 | Degradation | Errors and budget exhaustion never fail the analysis: the result is stored with status `DEGRADED` or `BUDGET_EXHAUSTED`. |
+| Language | Like the other agents' explanations, finding statements are written in Turkish; codes, values and evidence quotes stay in the original language (rule in the investigation system prompt). |
 
 Known resolutions: the sources provide no resolution text. `known_resolutions` returns earlier incidents
 with the same error signature whose source status is resolved or closed, with their status and time. It is

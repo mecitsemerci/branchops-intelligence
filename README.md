@@ -62,9 +62,10 @@ ile gerçek bir model çalıştırır (CPU'da analiz başına 6–11 dakika).
   exists. The model plans its next step itself: it calls one of five allow-listed, read-only tools
   (`search_history`, `get_issue_summary`, `issue_metadata`, `compare_error_signatures`,
   `known_resolutions`) per turn, sees the result, and concludes within at most 4 tool calls, 3 turns,
-  90 s (480 s in the CPU demo configuration) and 12k tokens (`agents/investigation.py`). The
-  [real-model screenshot](#with-a-real-model-vllm-qwen25-15b-instruct-on-cpu) of the investigation shows
-  the result with its checked evidence (in that run the 1.5B model concluded without calling a tool).
+  90 s (480 s in the CPU demo configuration) and 12k tokens (`agents/investigation.py`). It must verify
+  before it concludes: until it has made `min_tool_calls` (1) calls, the schema it is offered has no
+  conclude action. In the [real-model run](#with-a-real-model-vllm-qwen25-15b-instruct-on-cpu) every
+  investigation (13 of 13) called `search_history` before writing its findings.
 * **Memory.** Postgres checkpoints (`PostgresSaver`) keep the state of a run, so a run interrupted by a
   model outage or a crash resumes after the last completed node. The incident history, every past analysis
   and its score history are the long-term memory that retrieval, investigation and analytics read.
@@ -113,42 +114,47 @@ The UI is in Turkish, as the branch staff use it. All images were taken with
 Captured with `make screenshots-vllm` after `make up` (default `LLM_MODE=docker`) on a fresh database and
 `make seed-demo`, once every analysis had finished. The run, on an Apple M3 Pro with Docker limited to
 8 vCPU and 7.65 GiB, is recorded in [`real-model-run.json`](docs/screenshots/real-model-run.json),
-generated from the database: **20 analyses**, **353–608 s each (494.8 s on average)**, the `investigate`
-step ran in **15** of them and produced 15 findings whose evidence had **26 verified and 2 rejected
-quotes**, and the model made **0 tool calls** (see below).
+generated from the database: **16 analyses**, **311–623 s each (544.5 s on average)**. The `investigate`
+step ran in **13** of them and made **13 tool calls** (all `search_history`, one per investigation, none
+failed), so every investigation took **2 model turns**: one tool call, then the conclusion. No repair turn
+was needed and no result was `CONCLUDED_WITHOUT_TOOLS`. The 13 findings (11 observations, 2 hypotheses)
+cite **24 verified and 3 rejected quotes**. In the previous run, before `min_tool_calls`, the same model
+made 0 tool calls in 15 investigations.
 
 **Canlı Akış (`/live`):** the header names the model (`LLM: Qwen/Qwen2.5-1.5B-Instruct`); every LLM node
-card shows real averages, for example extraction 136.7 s and 43 257 tokens over 20 runs, and the
-investigation agent ("Geçmiş İnceleme Ajanı") 39.1 s. In the outcome strips the eighth of ten segments
-is `investigate`: green where it ran, grey where there was no related history (jira:BOPS-108). A grey
-ninth segment is `recommend` skipped because nothing was missing (jira:BOPS-2189420, completeness 100).
+card shows real averages over 16 runs, for example extraction 143.0 s and 35 649 tokens, and the
+investigation agent ("Geçmiş İnceleme Ajanı") 79.0 s, now two model turns instead of one. In the
+outcome strips the eighth of ten segments is `investigate`: green where it ran, grey where there was no
+related history (jira:BOPS-109, whose red second segment is a failed classification that sent it to
+`NEEDS_REVIEW`).
 
 ![Canlı Akış with vLLM](docs/screenshots/02-live-agents-vllm.png)
 
-**Kayıt detayı:** a vague ticket ("Acil bakılsın": "İşlem yapamıyoruz, acil") analysed by
-`Qwen/Qwen2.5-1.5B-Instruct`: summary, description and error detail are INSUFFICIENT, seven fields are
-MISSING, the occurrence time is UNKNOWN (its quote was not found in the text), and the quality score is
-32.22.
+**Kayıt detayı:** an incident reported in-app through MCP (`make seed-demo`: "Müşteri kimlik doğrulama
+ekranı açılmıyor", KPS-408) analysed by `Qwen/Qwen2.5-1.5B-Instruct`: summary and description are
+INSUFFICIENT, branch code and application are taken from the report, completeness is 65.98 and quality
+55.93.
 
 ![Kayıt detayı with vLLM](docs/screenshots/04-issue-detail-vllm.png)
 
 **Benzer kayıtlar:** the shortlist from retrieval with the similarity agent's verdicts. None of them is a
-`DUPLICATE_CANDIDATE`: without a shared application, error signature or specific error code the
-deterministic gate turns the model's "related" into `POSSIBLE_COMMON_CAUSE`, and candidates the model did
-not confirm stay `UNVERIFIED_CANDIDATE`.
+`DUPLICATE_CANDIDATE`. jira:BOPS-2217908 ("Müşteri kimlik bilgisi getirilemiyor") stays `RELATED`; for the
+others, which share only the category, the deterministic gate turns the model's "related" into
+`POSSIBLE_COMMON_CAUSE`.
 
 ![Benzer kayıtlar with vLLM](docs/screenshots/04b-issue-similar-vllm.png)
 
-**Geçmiş incelemesi:** the investigation agent's finding for the same incident, with each evidence quote
-checked by Python: ✓ found in the cited record, ✗ not found. The rejected quote was attributed to the
-current ticket's description but comes from the other incident. "Araçlar: —" means the model concluded
-in its first turn without calling a tool. That happened in all 15 runs: the candidates' summaries and
-excerpts are already in the first prompt, and the 1.5B model chose to conclude from them. The tool loop itself (allow-listed calls, budget, forced conclusion) is covered by
-`tests/unit/test_investigation.py` and runs in mock mode.
+**Geçmiş incelemesi:** the investigation agent's finding for the same incident. "Araçlar: search_history"
+lists the tool the model called before concluding (`search_history` with the query "Müşteri kimlik
+doğrulama", 5 results). The finding is in Turkish and both of its quotes come from jira:BOPS-2217908,
+the related candidate; ✓ means Python found the quote verbatim in the cited record (✗ would
+mean it did not). The 1.5B model always stopped after the one required call: no analysis in this run made
+two or more tool calls, so the multi-step part of the loop (several calls, budget, forced conclusion) is
+still shown only by `tests/unit/test_investigation.py` and mock mode.
 
 ![Geçmiş incelemesi with vLLM](docs/screenshots/04c-issue-investigation-vllm.png)
 
-The 1.5B model keeps the stack runnable on a laptop, but its classification is weak: it put 18 of the 20
+The 1.5B model keeps the stack runnable on a laptop, but its classification is weak: it put 14 of the 16
 analyses in TRANSACTION (see `category_of_analyses` in the evidence file). A wrong category in these
 screenshots is the model, not a pipeline bug; the production target is the bank's larger gateway model.
 
