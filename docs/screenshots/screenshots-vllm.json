@@ -3,36 +3,36 @@
     "page": "02-live-agents-vllm",
     "file": "02-live-agents-vllm.png",
     "url": "http://localhost:8090/live",
-    "timestamp": "2026-10-17T01:10:43+00:00",
+    "timestamp": "2026-10-17T08:45:25+00:00",
     "width": 2880,
-    "height": 3700,
-    "bytes": 743580
+    "height": 3642,
+    "bytes": 744382
   },
   {
     "page": "04-issue-detail-vllm",
     "file": "04-issue-detail-vllm.png",
-    "url": "http://localhost:8090/issues/jira:BOPS-2189418",
-    "timestamp": "2026-10-17T01:10:46+00:00",
+    "url": "http://localhost:8090/issues/app:RPT-5N2ULX4KWI",
+    "timestamp": "2026-10-17T08:45:28+00:00",
     "width": 2880,
-    "height": 3598,
-    "bytes": 495601
+    "height": 3700,
+    "bytes": 467096
   },
   {
     "page": "04b-issue-similar-vllm",
     "file": "04b-issue-similar-vllm.png",
-    "url": "http://localhost:8090/issues/jira:BOPS-2189418",
-    "timestamp": "2026-10-17T01:10:51+00:00",
+    "url": "http://localhost:8090/issues/app:RPT-5N2ULX4KWI",
+    "timestamp": "2026-10-17T08:45:33+00:00",
     "width": 2880,
-    "height": 4362,
-    "bytes": 650147
+    "height": 3934,
+    "bytes": 566612
   },
   {
     "page": "04c-issue-investigation-vllm",
     "file": "04c-issue-investigation-vllm.png",
-    "url": "http://localhost:8090/issues/jira:BOPS-2189418",
-    "timestamp": "2026-10-17T01:10:56+00:00",
+    "url": "http://localhost:8090/issues/app:RPT-5N2ULX4KWI",
+    "timestamp": "2026-10-17T08:45:38+00:00",
     "width": 2752,
     "height": 532,
-    "bytes": 74159
+    "bytes": 62668
   }
 ]
