@@ -62,7 +62,9 @@ ile gerçek bir model çalıştırır (CPU'da analiz başına 6–11 dakika).
   exists. The model plans its next step itself: it calls one of five allow-listed, read-only tools
   (`search_history`, `get_issue_summary`, `issue_metadata`, `compare_error_signatures`,
   `known_resolutions`) per turn, sees the result, and concludes within at most 4 tool calls, 3 turns,
-  90 s and 12k tokens (`agents/investigation.py`).
+  90 s (480 s in the CPU demo configuration) and 12k tokens (`agents/investigation.py`). The
+  [real-model screenshot](#with-a-real-model-vllm-qwen25-15b-instruct-on-cpu) of the investigation shows
+  the result with its checked evidence (in that run the 1.5B model concluded without calling a tool).
 * **Memory.** Postgres checkpoints (`PostgresSaver`) keep the state of a run, so a run interrupted by a
   model outage or a crash resumes after the last completed node. The incident history, every past analysis
   and its score history are the long-term memory that retrieval, investigation and analytics read.
@@ -103,9 +105,57 @@ Details, guards and how to add a capability: [docs/agents.md](docs/agents.md).
 
 ## Screenshots
 
+The UI is in Turkish, as the branch staff use it. All images were taken with
+[`scripts/capture_screenshots.py`](scripts/capture_screenshots.py).
+
+### With a real model (vLLM, Qwen2.5-1.5B-Instruct on CPU)
+
+Captured with `make screenshots-vllm` after `make up` (default `LLM_MODE=docker`) on a fresh database and
+`make seed-demo`, once every analysis had finished. The run, on an Apple M3 Pro with Docker limited to
+8 vCPU and 7.65 GiB, is recorded in [`real-model-run.json`](docs/screenshots/real-model-run.json),
+generated from the database: **20 analyses**, **353–608 s each (494.8 s on average)**, the `investigate`
+step ran in **15** of them and produced 15 findings whose evidence had **26 verified and 2 rejected
+quotes**, and the model made **0 tool calls** (see below).
+
+**Canlı Akış (`/live`):** the header names the model (`LLM: Qwen/Qwen2.5-1.5B-Instruct`); every LLM node
+card shows real averages, for example extraction 136.7 s and 43 257 tokens over 20 runs, and the
+investigation agent ("Geçmiş İnceleme Ajanı") 39.1 s. In the outcome strips the eighth of ten segments
+is `investigate`: green where it ran, grey where there was no related history (jira:BOPS-108). A grey
+ninth segment is `recommend` skipped because nothing was missing (jira:BOPS-2189420, completeness 100).
+
+![Canlı Akış with vLLM](docs/screenshots/02-live-agents-vllm.png)
+
+**Kayıt detayı:** a vague ticket ("Acil bakılsın": "İşlem yapamıyoruz, acil") analysed by
+`Qwen/Qwen2.5-1.5B-Instruct`: summary, description and error detail are INSUFFICIENT, seven fields are
+MISSING, the occurrence time is UNKNOWN (its quote was not found in the text), and the quality score is
+32.22.
+
+![Kayıt detayı with vLLM](docs/screenshots/04-issue-detail-vllm.png)
+
+**Benzer kayıtlar:** the shortlist from retrieval with the similarity agent's verdicts. None of them is a
+`DUPLICATE_CANDIDATE`: without a shared application, error signature or specific error code the
+deterministic gate turns the model's "related" into `POSSIBLE_COMMON_CAUSE`, and candidates the model did
+not confirm stay `UNVERIFIED_CANDIDATE`.
+
+![Benzer kayıtlar with vLLM](docs/screenshots/04b-issue-similar-vllm.png)
+
+**Geçmiş incelemesi:** the investigation agent's finding for the same incident, with each evidence quote
+checked by Python: ✓ found in the cited record, ✗ not found. The rejected quote was attributed to the
+current ticket's description but comes from the other incident. "Araçlar: —" means the model concluded
+in its first turn without calling a tool. That happened in all 15 runs: the candidates' summaries and
+excerpts are already in the first prompt, and the 1.5B model chose to conclude from them. The tool loop itself (allow-listed calls, budget, forced conclusion) is covered by
+`tests/unit/test_investigation.py` and runs in mock mode.
+
+![Geçmiş incelemesi with vLLM](docs/screenshots/04c-issue-investigation-vllm.png)
+
+The 1.5B model keeps the stack runnable on a laptop, but its classification is weak: it put 18 of the 20
+analyses in TRANSACTION (see `category_of_analyses` in the evidence file). A wrong category in these
+screenshots is the model, not a pipeline bug; the production target is the bank's larger gateway model.
+
+### Mock mode (deterministic, used by the 5-minute demo)
+
 Captured from `make up LLM_MODE=mock` after `make sim-once`, `make seed` and `make seed-demo`, with
-`make screenshots` ([`scripts/capture_screenshots.py`](scripts/capture_screenshots.py)). The UI is in
-Turkish, as the branch staff use it.
+`make screenshots`. The model is the keyword-based mock (`mock-rule-based`), so durations are near zero.
 
 **Canlı Akış (`/live`):** each LangGraph node as a card (robot = LLM agent, gear = deterministic step)
 with its latest output and 24-hour statistics, and below it every finished analysis with its per-node
@@ -231,12 +281,10 @@ card numbers, phone numbers, e-mail addresses) is masked before storage and befo
 
 ## Architecture
 
-On-premise, Python-only agentic application that analyses operational incidents reported by bank branch
-staff. Incidents arrive from several sources — Jira webhooks, ServiceNow Business Rule webhooks, CSV/XLSX/JSONL
-imports — through per-source adapters into one source-neutral pipeline. It classifies and structures each incident with the bank's internal
-LLM (preferred: **GLM-5.3-Flash** via an OpenAI-compatible gateway), maps it to a versioned template,
-computes **deterministic** completeness and quality scores, recommends what information is missing,
-detects similar and recurring incidents, and shows everything in an internal NiceGUI dashboard.
+Incidents arrive from several sources (Jira webhooks, ServiceNow Business Rule webhooks, CSV/XLSX/JSONL
+imports) through per-source adapters into one source-neutral pipeline. The worker runs the agents against
+the bank's internal LLM (preferred: **GLM-5.3-Flash** via an OpenAI-compatible gateway); the dashboard,
+the read API and the MCP server serve the results from PostgreSQL.
 
 It runs entirely inside OpenShift without internet access: no cloud LLMs, no CDN assets, no runtime
 package or model downloads, no external telemetry.

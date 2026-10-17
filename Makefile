@@ -186,6 +186,14 @@ screenshots: ## README screenshots from the running stack (once: .venv/bin/playw
 	  | $(BIN)/python scripts/render_terminal.py --title "branchops report --days 30" \
 	    --out docs/screenshots/10-report.png
 
+# Real-model evidence: needs `make up` (LLM_MODE=docker, vLLM), `make seed-demo`, and every analysis finished
+# (on CPU 1.5-3 hours); at least one incident should have related history so `investigate` runs.
+.PHONY: screenshots-vllm
+screenshots-vllm: ## Real-model README screenshots (-vllm suffix): live + investigated issue; needs make up + seed-demo, all analyses done
+	$(BIN)/python scripts/capture_screenshots.py --dashboard-url http://localhost:$${DASHBOARD_PORT:-8090} \
+	  --api-url $(API_URL) --out docs/screenshots --suffix=-vllm --prefer-investigated \
+	  --pages live,issue-detail,issue-similar,issue-investigation
+
 .PHONY: overview
 overview: ## Print the analytics overview from the API
 	@curl -fsS $(API_URL)/api/analytics/overview | $(PYTHON) -m json.tool
