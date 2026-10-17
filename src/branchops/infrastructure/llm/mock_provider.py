@@ -175,6 +175,7 @@ class MockModelProvider:
             "QualityAssessmentOutput": self._assess,
             "SimilarityOutput": self._similarity,
             "InvestigationOutput": self._investigate,
+            "InvestigationToolCall": self._investigate,
             "RecommendationOutput": self._recommend,
             "ReportOutput": self._report,
         }.get(request.schema_name or "", lambda _p: {"ok": True})
@@ -371,8 +372,10 @@ class MockModelProvider:
     def _investigate(self, prompt: str) -> dict[str, Any]:
         """Look at the first candidate once, then conclude: one quoted observation, one hypothesis.
 
-        Anything the mock cannot turn into a valid tool call (unparsable blocks, no usable candidate key,
-        an exhausted budget) ends in a valid conclusion, so the step never fails in mock mode.
+        While a tool call is required (``tool_required``) the mock always calls one, falling back to
+        ``known_resolutions`` (no arguments). Anything else it cannot turn into a valid tool call
+        (unparsable blocks, no usable candidate key, an exhausted budget) ends in a valid conclusion, so
+        the step never fails in mock mode.
         """
         payload = parse_json_block(prompt, "candidates")
         if not isinstance(payload, dict):
@@ -388,6 +391,8 @@ class MockModelProvider:
         if candidates and not history and can_call:
             key = candidates[0]["incident_key"]
             return {"action": "call_tool", "tool": "get_issue_summary", "arguments": {"incident_key": key}}
+        if payload.get("tool_required") and can_call:
+            return {"action": "call_tool", "tool": "known_resolutions", "arguments": {}}
         findings: list[dict[str, Any]] = []
         if candidates:
             first = candidates[0]

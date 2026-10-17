@@ -194,6 +194,9 @@ workflow:
   investigation:
     enabled: false
     max_tool_calls: 4
+    # The agent must look at history through at least one tool before it writes a finding: until then
+    # the model is not offered the conclude action (0 disables the minimum).
+    min_tool_calls: 1
     max_depth: 3
     max_seconds: 90
     max_tokens: 12000
