@@ -144,6 +144,97 @@ class TestBounds:
         assert cancelled.stopped_reason == "cancelled" and provider.requests == []
 
 
+FINDING = {
+    "statement": "Aynı hata kodu daha önce görülmüş.",
+    "kind": "OBSERVATION",
+    "evidence": [{"source": "incident:jira:OLD-1", "quote": "EFT-504 hatasıyla düşüyor"}],
+    "related_incidents": ["jira:OLD-1"],
+}
+
+
+class TestMinimumToolCalls:
+    """``min_tool_calls``: the conclude action is withheld until the model has consulted a tool."""
+
+    @staticmethod
+    def _agent(
+        responders: dict[str, list[Any]], repairs: int = 1
+    ) -> tuple[InvestigationAgent, ScriptedProvider]:
+        provider = ScriptedProvider(responders)
+        return InvestigationAgent(
+            StructuredCaller(provider, max_repair_attempts=repairs), FakeReader()
+        ), provider
+
+    def test_first_turn_offers_no_conclude_action(self) -> None:
+        a, provider = self._agent(
+            {
+                "InvestigationToolCall": [call("get_issue_summary", incident_key="jira:OLD-1")],
+                "InvestigationOutput": [conclude(FINDING)],
+            }
+        )
+        result, _ = run(a, min_tool_calls=1)
+        first, second = provider.requests
+        assert first.schema_name == "InvestigationToolCall"
+        assert (first.json_schema or {})["properties"]["action"]["const"] == "call_tool"
+        assert "conclude" not in json.dumps(first.json_schema)
+        assert "conclude" not in first.messages[0].content.split("JSON Schema:")[1]
+        assert "You have not consulted any tool yet" in first.messages[-1].content
+        assert second.schema_name == "InvestigationOutput" and "conclude" in json.dumps(second.json_schema)
+        assert "You have not consulted" not in second.messages[-1].content
+        assert result.status == "COMPLETED" and [c.tool for c in result.tool_calls] == ["get_issue_summary"]
+        assert result.findings[0].kind == "OBSERVATION"
+
+    def test_conclusion_without_tools_is_repaired_once_then_degraded(self) -> None:
+        a, provider = self._agent({"InvestigationToolCall": [conclude(FINDING), conclude(FINDING)]})
+        result, stats = run(a, min_tool_calls=1)
+        assert len(provider.requests) == 2  # the first answer and the single repair turn
+        assert "not valid for the schema" in provider.requests[1].messages[-1].content
+        assert result.status == "DEGRADED" and result.stopped_reason == "CONCLUDED_WITHOUT_TOOLS"
+        assert result.tool_calls == [] and result.rounds == 1
+        assert [(f.kind, [e.verified for e in f.evidence]) for f in result.findings] == [
+            ("OBSERVATION", [True])
+        ]
+        assert stats.attempts == 2 and result.prompt_tokens > 0
+
+    def test_repair_turn_that_calls_a_tool_continues_normally(self) -> None:
+        a, _ = self._agent(
+            {
+                "InvestigationToolCall": [conclude(FINDING), call("search_history", query="EFT")],
+                "InvestigationOutput": [conclude(FINDING)],
+            }
+        )
+        result, _ = run(a, min_tool_calls=1)
+        assert result.status == "COMPLETED" and [c.tool for c in result.tool_calls] == ["search_history"]
+
+    def test_invalid_answers_other_than_a_conclusion_still_fail(self) -> None:
+        bad = lambda _r: json.dumps({"action": "call_tool", "tool": "drop_table"})  # noqa: E731
+        a, _ = self._agent({"InvestigationToolCall": [bad, bad]})
+        with pytest.raises(StructuredOutputError):
+            run(a, min_tool_calls=1)
+
+    def test_zero_restores_the_previous_behaviour(self) -> None:
+        a, provider = self._agent({"InvestigationOutput": [conclude(FINDING)]})
+        result, _ = run(a, min_tool_calls=0)
+        assert [r.schema_name for r in provider.requests] == ["InvestigationOutput"]
+        assert "You have not consulted" not in provider.requests[0].messages[-1].content
+        assert result.status == "COMPLETED" and result.tool_calls == []
+
+    def test_minimum_never_overrides_the_tool_budget(self) -> None:
+        a, provider = self._agent(
+            {
+                "InvestigationToolCall": [call("search_history", query="EFT")],
+                "InvestigationOutput": [conclude(FINDING)],
+            }
+        )
+        result, _ = run(a, min_tool_calls=3, max_tool_calls=1)
+        assert [r.schema_name for r in provider.requests] == ["InvestigationToolCall", "InvestigationOutput"]
+        assert result.status == "COMPLETED"
+
+    def test_system_prompt_asks_for_turkish_findings(self) -> None:
+        from branchops.agents.investigation import SYSTEM_PROMPT
+
+        assert "finding statement in Turkish" in SYSTEM_PROMPT and "original language" in SYSTEM_PROMPT
+
+
 class TestWorkflowStep:
     def _workflow(self, registry: TemplateRegistry, enabled: bool, history: InMemoryHistory) -> Any:
         from branchops.workflows.issue_analysis import IssueAnalysisWorkflow
@@ -257,6 +348,32 @@ class TestMockProviderDrivesInvestigation:
     def test_concludes_when_no_valid_tool_call_is_possible(self, prompt: str) -> None:
         assert self._ask(prompt).action == "conclude"
 
+    @pytest.mark.parametrize(
+        ("candidates", "history", "tool"),
+        [
+            ([{"incident_key": "jira:OLD-1"}], [], "get_issue_summary"),
+            ([], [], "known_resolutions"),
+            ([{"summary": "anahtar yok"}], [], "known_resolutions"),
+        ],
+    )
+    def test_calls_a_tool_while_one_is_required(
+        self, candidates: list[dict[str, Any]], history: list[Any], tool: str
+    ) -> None:
+        payload = {"candidates": candidates, "remaining_tool_calls": 4, "tool_required": True}
+        prompt = f"<candidates>{json.dumps(payload)}</candidates><history>{json.dumps(history)}</history>"
+        from branchops.agents.investigation import InvestigationToolCall
+        from branchops.application.interfaces.model_provider import ChatMessage
+        from branchops.infrastructure.llm.mock_provider import MockModelProvider
+
+        request = CompletionRequest(
+            messages=[ChatMessage("user", prompt)],
+            agent="investigation",
+            correlation_id="c",
+            schema_name="InvestigationToolCall",
+        )
+        out = InvestigationToolCall.model_validate_json(MockModelProvider().complete(request).content)
+        assert out.tool == tool
+
     def test_demo_configuration_completes_the_step(self, registry: TemplateRegistry) -> None:
         import yaml
 
@@ -265,7 +382,7 @@ class TestMockProviderDrivesInvestigation:
 
         docker = yaml.safe_load((ROOT / "config" / "docker.yaml").read_text("utf-8"))
         demo = docker["workflow"]["investigation"]
-        assert demo["enabled"] is True
+        assert demo["enabled"] is True and demo["min_tool_calls"] == 1
         settings = make_settings(workflow={"investigation": demo})
         wf = IssueAnalysisWorkflow(
             caller=StructuredCaller(MockModelProvider()),

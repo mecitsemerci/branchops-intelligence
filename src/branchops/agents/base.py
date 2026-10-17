@@ -27,12 +27,16 @@ _MODE_ORDER = [OutputMode.JSON_SCHEMA, OutputMode.JSON_OBJECT, OutputMode.PROMPT
 
 
 class StructuredOutputError(Exception):
-    """The model did not produce schema-valid output within the repair budget."""
+    """The model did not produce schema-valid output within the repair budget.
 
-    def __init__(self, message: str, usage: TokenUsage, attempts: int) -> None:
+    ``content`` is the model's last (invalid) answer, for callers that can still use part of it.
+    """
+
+    def __init__(self, message: str, usage: TokenUsage, attempts: int, content: str = "") -> None:
         super().__init__(message)
         self.usage = usage
         self.attempts = attempts
+        self.content = content
 
 
 class DeadlineExceededError(ModelUnavailableError):
@@ -135,6 +139,7 @@ class StructuredCaller:
         messages = [ChatMessage("system", system), ChatMessage("user", user_prompt)]
         instruments = get_instruments()
         last_error = "no attempt made"
+        last_content = ""
         repairs_left = self._max_repairs
 
         with tracer().start_as_current_span(f"llm.{agent}") as span:
@@ -174,6 +179,7 @@ class StructuredCaller:
                 instruments.model_latency_ms.record(result.latency_ms, attrs)
                 instruments.model_tokens.add(result.usage.prompt_tokens, {**attrs, "type": "prompt"})
                 instruments.model_tokens.add(result.usage.completion_tokens, {**attrs, "type": "completion"})
+                last_content = result.content
                 try:
                     data = extract_json(result.content)
                     value = schema.model_validate(data, context=validation_context or {})
@@ -203,6 +209,7 @@ class StructuredCaller:
             f"{agent}: invalid structured output after {stats.attempts} attempt(s): {last_error}",
             TokenUsage(stats.prompt_tokens, stats.completion_tokens),
             stats.attempts,
+            last_content,
         )
 
 

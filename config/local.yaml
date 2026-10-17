@@ -11,7 +11,7 @@ sources:
                     updated_at: Güncelleme, group_key: Ekip}
     options: {id_column: Kayıt No}
 llm: {provider: mock}
-workflow: {checkpointer: postgres, investigation: {enabled: true, max_tool_calls: 4, max_depth: 3}}
+workflow: {checkpointer: postgres, investigation: {enabled: true, max_tool_calls: 4, min_tool_calls: 1, max_depth: 3}}
 worker: {concurrency: 1, poll_interval_seconds: 1, health_port: 8081}
 security: {auth_mode: dev, dev_user: developer, dev_roles: [ADMIN]}
 templates: {directory: templates}

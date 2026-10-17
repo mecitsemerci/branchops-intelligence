@@ -406,6 +406,8 @@ class InvestigationSettings(BaseModel):
 
     enabled: bool = False
     max_tool_calls: int = Field(default=4, ge=1, le=10)
+    # Tool calls before the model may conclude (0 disables); the conclude action is withheld until then.
+    min_tool_calls: int = Field(default=1, ge=0, le=10)
     max_depth: int = Field(default=3, ge=1, le=6)  # model turns that may call a tool
     max_seconds: float = Field(default=90.0, ge=5)
     max_tokens: int = Field(default=12_000, ge=1000)

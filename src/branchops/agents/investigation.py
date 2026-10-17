@@ -4,7 +4,9 @@ The model may only choose among allow-listed, read-only tools whose arguments ar
 tools are parameterised repository queries behind the ``InvestigationReader`` port (the model never sees or
 writes SQL). Incident keys the model can ask about are limited to those already surfaced (similarity
 candidates and earlier tool results). Every loop is bounded by tool calls, rounds (depth), duration, token
-budget and an optional cancellation event; on any limit the agent concludes with what it has.
+budget and an optional cancellation event; on any limit the agent concludes with what it has. Until
+``min_tool_calls`` tools have been consulted (and the budget allows another call), the schema offered to the
+model has no conclude action: the agent verifies the candidates before it writes a finding.
 
 Conclusions are checked by Python: evidence quotes must occur verbatim in the current record or in a tool
 result, and a statement without verified evidence is stored as a HYPOTHESIS, never as an observation.
@@ -19,7 +21,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
-from branchops.agents.base import CallStats, DeadlineExceededError, StructuredCaller
+from branchops.agents.base import (
+    CallStats,
+    DeadlineExceededError,
+    StructuredCaller,
+    StructuredOutputError,
+    extract_json,
+)
 from branchops.agents.prompts import GUARDRAILS, EvidenceQuote, json_block
 from branchops.application.interfaces.investigation import HistoryItem, InvestigationReader
 from branchops.domain.entities.analysis import InvestigationFinding, InvestigationResult, ToolCallRecord
@@ -77,6 +85,16 @@ class InvestigationOutput(BaseModel):
         return self
 
 
+# Turn schema while a tool call is still required: the conclude action is not offered. (A comment, not a
+# docstring: pydantic would put a docstring into the JSON schema the model sees.)
+class InvestigationToolCall(BaseModel):
+    action: Literal["call_tool"]
+    tool: ToolName
+    arguments: ToolArguments = Field(default_factory=ToolArguments)
+
+
+CONCLUDED_WITHOUT_TOOLS = "CONCLUDED_WITHOUT_TOOLS"
+
 SYSTEM_PROMPT = (
     GUARDRAILS
     + """
@@ -87,6 +105,8 @@ Rules for conclusions:
 - State only what the quotes support. A suspected root cause without direct evidence is a HYPOTHESIS.
 - Name related incidents only by keys that appear in <candidates> or <history>.
 - Similar symptoms do not prove a common cause.
+- Write every finding statement in Turkish; keep codes, values and evidence quotes in the original language.
+- When the schema offers only "call_tool", you must call a tool; the conclusion comes in a later turn.
 """
 )
 
@@ -98,6 +118,7 @@ class InvestigationBudget:
     max_seconds: float
     max_tokens: int
     cancel: threading.Event | None = None
+    min_tool_calls: int = 0  # tool calls required before the model may conclude (0: no minimum)
 
 
 @dataclass
@@ -184,6 +205,7 @@ class InvestigationAgent:
         started = time.monotonic()
         deadline = started + budget.max_seconds
         stopped: str | None = None
+        degraded: str | None = None
         findings: list[FindingOutput] = []
         rounds = 0
         for depth in range(budget.max_depth + 1):
@@ -197,25 +219,30 @@ class InvestigationAgent:
                 stopped = "token budget exhausted"
                 break
             must_conclude = depth == budget.max_depth or len(run.calls) >= budget.max_tool_calls
+            tool_required = not must_conclude and len(run.calls) < budget.min_tool_calls
             payload = {
                 "current": current,
                 "candidates": [_item_view(c, text=True) for c in candidates],
                 "remaining_tool_calls": max(0, budget.max_tool_calls - len(run.calls)),
                 "must_conclude": must_conclude,
+                "tool_required": tool_required,
             }
-            prompt = "\n\n".join(
-                [
-                    json_block("tools", TOOLS),
-                    json_block("candidates", payload),
-                    json_block("history", run.history),
-                ]
+            blocks = [
+                json_block("tools", TOOLS),
+                json_block("candidates", payload),
+                json_block("history", run.history),
+            ]
+            if tool_required:
+                blocks.append(_tool_required_note(len(run.calls), budget.min_tool_calls))
+            schema: type[InvestigationOutput | InvestigationToolCall] = (
+                InvestigationToolCall if tool_required else InvestigationOutput
             )
             try:
                 result = self._caller.call(
                     agent=AGENT_NAME,
                     system_prompt=SYSTEM_PROMPT,
-                    user_prompt=prompt,
-                    schema=InvestigationOutput,
+                    user_prompt="\n\n".join(blocks),
+                    schema=schema,
                     correlation_id=correlation_id,
                     validation_context={"must_conclude": must_conclude},
                     deadline=deadline,
@@ -223,13 +250,25 @@ class InvestigationAgent:
             except DeadlineExceededError:  # our own time budget, not a model outage
                 stopped = "time budget exhausted"
                 break
+            except StructuredOutputError as exc:
+                # A conclusion although a tool call was required, also after the repair turn: keep its
+                # findings (they are evidence-checked like any other) and mark the result DEGRADED.
+                conclusion = _conclusion(exc.content) if tool_required else None
+                if conclusion is None:
+                    raise
+                rounds += 1
+                run.prompt_tokens += exc.usage.prompt_tokens
+                run.completion_tokens += exc.usage.completion_tokens
+                stats.attempts += exc.attempts
+                findings, degraded = conclusion.findings, CONCLUDED_WITHOUT_TOOLS
+                break
             rounds += 1
             run.prompt_tokens += result.stats.prompt_tokens
             run.completion_tokens += result.stats.completion_tokens
             stats.attempts += result.stats.attempts
             stats.output_mode = result.stats.output_mode
             out = result.value
-            if out.action == "conclude":
+            if isinstance(out, InvestigationOutput) and out.action == "conclude":
                 findings = out.findings
                 break
             assert out.tool is not None  # noqa: S101 - validated by the schema
@@ -237,8 +276,8 @@ class InvestigationAgent:
         stats.prompt_tokens, stats.completion_tokens = run.prompt_tokens, run.completion_tokens
         return (
             InvestigationResult(
-                status="COMPLETED" if stopped is None else "BUDGET_EXHAUSTED",
-                stopped_reason=stopped,
+                status="DEGRADED" if degraded else "COMPLETED" if stopped is None else "BUDGET_EXHAUSTED",
+                stopped_reason=degraded or stopped,
                 rounds=rounds,
                 tool_calls=run.calls,
                 findings=self._checked(findings, sources, run.known),
@@ -268,3 +307,22 @@ class InvestigationAgent:
                 )
             )
         return out
+
+
+def _tool_required_note(made: int, required: int) -> str:
+    if made == 0:
+        return (
+            "You have not consulted any tool yet. Pick one tool to verify the candidates before concluding."
+        )
+    return (
+        f"You have consulted {made} tool(s); {required} are required. Pick one more tool before concluding."
+    )
+
+
+def _conclusion(content: str) -> InvestigationOutput | None:
+    """The model's answer as a conclusion under the full schema, or None if it is not one."""
+    try:
+        out = InvestigationOutput.model_validate(extract_json(content), context={"must_conclude": True})
+    except ValueError:  # includes pydantic.ValidationError
+        return None
+    return out if out.action == "conclude" else None

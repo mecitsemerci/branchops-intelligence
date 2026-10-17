@@ -532,7 +532,13 @@ class IssueAnalysisWorkflow:
             if item is not None
         ]
         cfg = self._settings.investigation
-        budget = InvestigationBudget(cfg.max_tool_calls, cfg.max_depth, cfg.max_seconds, cfg.max_tokens)
+        budget = InvestigationBudget(
+            cfg.max_tool_calls,
+            cfg.max_depth,
+            cfg.max_seconds,
+            cfg.max_tokens,
+            min_tool_calls=cfg.min_tool_calls,
+        )
 
         def call() -> tuple[InvestigationResult, Any]:
             return self._investigator.run(  # type: ignore[union-attr]
